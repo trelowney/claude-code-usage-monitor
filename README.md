@@ -1,7 +1,9 @@
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-# Claude Code Usage Monitor
+# Claude Usage Monitor (trelowney's build)
+
+Private fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor), docked to the left of the taskbar with no tray icons and no auto-update.
 
 ![Screenshot](.github/animation.gif)
 
@@ -42,21 +44,9 @@ If you use Claude Code through WSL, that is supported too. The monitor can read 
 
 ## Install
 
-Install the latest version from WinGet:
-
-```powershell
-winget install CodeZeno.ClaudeCodeUsageMonitor
-```
-
-If you prefer not to use WinGet, you can still download the latest `claude-code-usage-monitor.exe` from the [Releases](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases) page and run it directly.
+Download the latest `claude-usage-monitor-trelowney.exe` from the [Releases](https://github.com/trelowney/claude-code-usage-monitor/releases) page and run it directly. No installer, no WinGet package - it's a portable executable.
 
 ## Use
-
-After installing with WinGet, run:
-
-```powershell
-claude-code-usage-monitor
-```
 
 Once running, it will appear docked to the left edge of your taskbar. No icon is added to the system tray.
 
@@ -80,7 +70,7 @@ When multiple models are shown, each model has its own usage bar and matching us
 If you need to troubleshoot startup or visibility issues, run:
 
 ```powershell
-claude-code-usage-monitor --diagnose
+claude-usage-monitor-trelowney.exe --diagnose
 ```
 
 This writes a log file to:
@@ -122,7 +112,6 @@ What the app sends over the network:
 - Requests to Anthropic's Claude endpoints to read your usage and rate-limit information
 - Requests to ChatGPT's Codex usage endpoint to read your Codex usage and rate-limit information, if Codex is enabled
 - Requests to Google's Cloud Code / Antigravity endpoints to read your Antigravity quota information, if Antigravity is enabled
-- Requests to GitHub only if you use the app's update check / self-update feature
 - If proxy environment variables such as `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` are set, those outbound requests may use that proxy
 
 What the app stores locally:
@@ -148,7 +137,7 @@ Notes:
 - If your Claude Code token is expired, the app may ask the local Claude CLI to refresh it in the background
 - If your Codex token is expired, the app may ask the local Codex CLI to refresh it in the background. The monitor does not write `auth.json` itself; any credential update is handled by the Codex CLI.
 - If your Antigravity token is expired, open Antigravity and sign in again. The monitor does not write Windows Credential Manager entries itself.
-- Portable installs can update themselves by downloading the latest release from this repository
+- The built-in update checker is disabled in this fork; grab new builds manually from the [Releases](https://github.com/trelowney/claude-code-usage-monitor/releases) page
 - Proxies should be trusted because proxied usage requests include your OAuth bearer token inside the TLS connection
 
 ## How It Works

@@ -2579,6 +2579,15 @@ fn show_context_menu(hwnd: HWND) {
 
         let menu = CreatePopupMenu().unwrap();
 
+        let title_str = native_interop::wide_str(strings.window_title);
+        let _ = AppendMenuW(
+            menu,
+            MF_GRAYED,
+            0,
+            PCWSTR::from_raw(title_str.as_ptr()),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
         let refresh_str = native_interop::wide_str(strings.refresh);
         let _ = AppendMenuW(
             menu,

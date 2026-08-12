@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_ASSET_NAME: claude-code-usage-monitor.exe
+  RELEASE_ASSET_NAME: claude-usage-monitor-trelowney.exe
   WINGET_PACKAGE_ID: CodeZeno.ClaudeCodeUsageMonitor
 
 jobs:
@@ -28,7 +28,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/claude-code-usage-monitor.exe
+          name: "trelowney's Claude Usage Monitor ${{ github.ref_name }}"
+          files: target/release/claude-usage-monitor-trelowney.exe
           generate_release_notes: true
 
   winget:

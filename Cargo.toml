@@ -1,19 +1,19 @@
 [package]
-name = "claude-code-usage-monitor"
-version = "1.4.11"
+name = "claude-usage-monitor-trelowney"
+version = "1.4.12"
 edition = "2021"
 license = "MIT"
-description = "Claude Code Usage Monitor"
+description = "Claude Code Usage Monitor - trelowney's private build"
 repository = "https://github.com/trelowney/claude-code-usage-monitor"
 
 [package.metadata.winres]
-CompanyName = "Code Zeno Pty Ltd"
-ProductName = "Claude Code Usage Monitor"
-FileDescription = "Claude Code Usage Monitor"
-OriginalFilename = "claude-code-usage-monitor.exe"
-InternalName = "ClaudeCodeUsageMonitor"
-Comments = "https://codezeno.com.au"
-LegalCopyright = "Copyright (C) 2026 Code Zeno Pty Ltd"
+CompanyName = "trelowney"
+ProductName = "Claude Usage Monitor (trelowney's build)"
+FileDescription = "Claude Usage Monitor (trelowney's build)"
+OriginalFilename = "claude-usage-monitor-trelowney.exe"
+InternalName = "ClaudeUsageMonitorTrelowney"
+Comments = "https://github.com/trelowney/claude-code-usage-monitor"
+LegalCopyright = "Copyright (C) 2026 Code Zeno Pty Ltd. Modified by trelowney."
 
 [dependencies]
 ureq = { version = "2", default-features = false, features = ["native-tls", "json", "proxy-from-env"] }
