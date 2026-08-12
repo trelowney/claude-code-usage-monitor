@@ -319,7 +319,7 @@ struct SettingsFile {
 impl Default for SettingsFile {
     fn default() -> Self {
         Self {
-            tray_offset: 0,
+            tray_offset: default_tray_offset(),
             taskbar_index: 0,
             poll_interval_ms: default_poll_interval(),
             language: None,
@@ -334,6 +334,16 @@ impl Default for SettingsFile {
 
 fn default_poll_interval() -> u32 {
     POLL_15_MIN
+}
+
+/// Base (96 DPI) distance to start the widget from the taskbar's left edge
+/// on a fresh install / after "Reset Position", so it doesn't land flush
+/// against whatever else lives at the very left edge (e.g. the Windows 11
+/// Widgets/weather board) before the user has had a chance to drag it clear.
+const DEFAULT_LEFT_MARGIN: i32 = 110;
+
+fn default_tray_offset() -> i32 {
+    sc(DEFAULT_LEFT_MARGIN)
 }
 
 fn default_widget_visible() -> bool {
@@ -2528,7 +2538,7 @@ unsafe extern "system" fn wnd_proc(
                     {
                         let mut state = lock_state();
                         if let Some(s) = state.as_mut() {
-                            s.tray_offset = 0;
+                            s.tray_offset = default_tray_offset();
                         }
                     }
                     save_state_settings();
