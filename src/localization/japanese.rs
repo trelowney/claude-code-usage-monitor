@@ -44,8 +44,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_token_expired_body: "ターミナルで 'codex' を実行し、サインインの案内に従ってください。その後、このアプリを更新または再起動してください。",
     antigravity_token_expired_title: "Antigravity 認証エラー",
     antigravity_token_expired_body: "Antigravity を開いて再度サインインしてください。その後、このアプリを更新するか再起動してください。",
-    codex_window_title: "Codex 使用量モニター",
-    antigravity_window_title: "Antigravity 使用量モニター",
     second_suffix: "秒",
     session_reset_title: "5時間の使用量がリセットされました",
     session_reset_body: "{model} の5時間の使用量ウィンドウがリセットされました。",

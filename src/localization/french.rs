@@ -44,8 +44,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_token_expired_body: "Executez 'codex' dans un terminal et suivez les instructions de connexion. Ensuite, actualisez ou redemarrez cette application.",
     antigravity_token_expired_title: "Erreur d'authentification Antigravity",
     antigravity_token_expired_body: "Ouvrez Antigravity et reconnectez-vous. Ensuite, actualisez ou redemarrez cette application.",
-    codex_window_title: "Moniteur d'utilisation Codex",
-    antigravity_window_title: "Moniteur d'utilisation Antigravity",
     second_suffix: "s",
     session_reset_title: "Utilisation de 5 heures réinitialisée",
     session_reset_body: "Votre fenêtre d'utilisation de 5 heures {model} a été réinitialisée.",

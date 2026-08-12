@@ -187,8 +187,6 @@ pub struct Strings {
     pub codex_token_expired_body: &'static str,
     pub antigravity_token_expired_title: &'static str,
     pub antigravity_token_expired_body: &'static str,
-    pub codex_window_title: &'static str,
-    pub antigravity_window_title: &'static str,
     pub session_reset_title: &'static str,
     pub session_reset_body: &'static str,
     pub weekly_reset_title: &'static str,

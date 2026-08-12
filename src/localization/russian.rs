@@ -45,8 +45,6 @@ pub(super) const STRINGS: Strings = Strings {
     codex_token_expired_body: "Запустите 'codex' в терминале и следуйте инструкциям для входа. После этого обновите или перезапустите приложение.",
     antigravity_token_expired_title: "Ошибка авторизации Antigravity",
     antigravity_token_expired_body: "Откройте Antigravity и войдите снова. После этого обновите или перезапустите приложение.",
-    codex_window_title: "Монитор использования Codex",
-    antigravity_window_title: "Монитор использования Antigravity",
     session_reset_title: "Использование за 5 часов сброшено",
     session_reset_body: "Ваше 5-часовое окно использования {model} было сброшено.",
     weekly_reset_title: "Использование за 7 дней сброшено",
