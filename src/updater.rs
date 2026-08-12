@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use serde::Deserialize;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
+const GITHUB_API_ACCEPT: &str = "application/vnd.github+json";
+const GITHUB_API_VERSION: &str = "2022-11-28";
+const RELEASE_ASSET_NAME: &str = "claude-usage-monitor-trelowney.exe";
 const HELPER_EXE_NAME: &str = "updater-helper.exe";
 const DOWNLOAD_EXE_NAME: &str = "update-download.exe";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -33,6 +37,18 @@ pub struct ReleaseDescriptor {
 pub enum UpdateCheckResult {
     UpToDate,
     Available(ReleaseDescriptor),
+}
+
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 pub fn handle_cli_mode(args: &[String]) -> Option<i32> {
@@ -60,11 +76,11 @@ pub fn current_install_channel() -> InstallChannel {
     }
 }
 
-/// Update checking is disabled in this fork: there is no release feed to
-/// check against, so this always reports the app as up to date rather than
-/// pointing at (and potentially overwriting a local build with) upstream.
 pub fn check_for_updates() -> Result<UpdateCheckResult, String> {
-    Ok(UpdateCheckResult::UpToDate)
+    match fetch_latest_release()? {
+        Some(release) => Ok(UpdateCheckResult::Available(release)),
+        None => Ok(UpdateCheckResult::UpToDate),
+    }
 }
 
 pub fn begin_winget_update() -> Result<(), String> {
@@ -150,6 +166,92 @@ fn apply_update(target: PathBuf, source: PathBuf, pid: u32) -> Result<(), String
     let _ = std::fs::remove_file(&source);
 
     Ok(())
+}
+
+fn fetch_latest_release() -> Result<Option<ReleaseDescriptor>, String> {
+    let (owner, repo) = github_repo()?;
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let agent = build_agent()?;
+
+    let response = agent
+        .get(&url)
+        .set("Accept", GITHUB_API_ACCEPT)
+        .set("User-Agent", user_agent())
+        .set("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .call()
+        .map_err(|e| format!("Unable to check GitHub releases: {e}"))?;
+
+    let release: GitHubRelease = response
+        .into_json()
+        .map_err(|e| format!("Unable to parse GitHub release data: {e}"))?;
+
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    if !is_version_newer(&latest_version, env!("CARGO_PKG_VERSION")) {
+        return Ok(None);
+    }
+
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name.eq_ignore_ascii_case(RELEASE_ASSET_NAME))
+        .or_else(|| {
+            release
+                .assets
+                .iter()
+                .find(|asset| asset.name.to_ascii_lowercase().ends_with(".exe"))
+        })
+        .ok_or_else(|| {
+            "No Windows executable asset was found in the latest release.".to_string()
+        })?;
+
+    Ok(Some(ReleaseDescriptor {
+        latest_version,
+        asset_url: asset.browser_download_url.clone(),
+    }))
+}
+
+fn github_repo() -> Result<(&'static str, &'static str), String> {
+    let repository = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/');
+    let parts: Vec<&str> = repository.split('/').collect();
+    if parts.len() < 2 {
+        return Err("Package repository URL is not configured for GitHub releases.".to_string());
+    }
+
+    let owner = parts[parts.len() - 2];
+    let repo = parts[parts.len() - 1];
+    if owner.is_empty() || repo.is_empty() {
+        return Err("Package repository URL is not configured for GitHub releases.".to_string());
+    }
+
+    Ok((owner, repo))
+}
+
+/// Compares versions shaped like `<major>.<minor>.<patch>[-trelowney.<build>]`.
+/// The trailing build number (after the last '.') of the `-trelowney.N`
+/// suffix is compared too, so e.g. `1.4.9-trelowney.2` is correctly newer
+/// than `1.4.9-trelowney.1` even though the base version is identical.
+fn is_version_newer(candidate: &str, current: &str) -> bool {
+    parse_version(candidate) > parse_version(current)
+}
+
+fn parse_version(version: &str) -> (u32, u32, u32, u32) {
+    let mut split = version.splitn(2, '-');
+    let core = split.next().unwrap_or(version);
+    let suffix = split.next().unwrap_or("");
+
+    let mut parts = core.split('.').map(|part| part.parse::<u32>().unwrap_or(0));
+    let build = suffix
+        .rsplit('.')
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        build,
+    )
 }
 
 fn build_agent() -> Result<ureq::Agent, String> {

@@ -6,6 +6,7 @@ mod models;
 mod native_interop;
 mod poller;
 mod theme;
+mod toast;
 mod updater;
 mod window;
 

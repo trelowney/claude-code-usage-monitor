@@ -25,6 +25,7 @@ use crate::native_interop::{
 };
 use crate::poller;
 use crate::theme;
+use crate::toast;
 use crate::updater::{self, InstallChannel, ReleaseDescriptor, UpdateCheckResult};
 
 /// Wrapper to make HWND sendable across threads (safe for PostMessage usage)
@@ -1288,12 +1289,16 @@ pub fn run() {
         };
         SetTimer(hwnd, TIMER_POLL, initial_poll_ms, None);
 
-        // Watch for explorer.exe restarts so we can re-embed and re-add the tray
-        // icon (the shell discards tray registrations when it restarts). This
+        // Watch for explorer.exe restarts so we can re-embed the widget (the
+        // shell destroys our embedded child window when it restarts). This
         // runs on a dedicated thread, NOT a window timer: once explorer destroys
         // the taskbar, our embedded child window stops receiving all messages
         // (WM_TIMER included), so a timer would never fire again.
         spawn_taskbar_watchdog();
+
+        // Register the AUMID/Start Menu shortcut needed for toast notifications.
+        // Involves file I/O and COM, so keep it off the UI thread.
+        std::thread::spawn(toast::init);
 
         // Initial poll
         let send_hwnd = SendHwnd::from_hwnd(hwnd);
@@ -1755,12 +1760,30 @@ fn do_poll(send_hwnd: SendHwnd) {
                 poller::PollError::RequestFailed => None,
             };
             // Distinguish auth-required errors from transient errors.
-            {
+            let notify_auth_error = {
                 let mut state = lock_state();
+                let mut notify = None;
                 if let Some(s) = state.as_mut() {
                     s.last_poll_ok = false;
                     match auth_watch {
                         Some((watch_mode, watch_snapshot)) => {
+                            // Only toast on the first failure so it doesn't spam.
+                            if s.retry_count == 0 {
+                                let strings = s.language.strings();
+                                notify = Some(if s.show_claude_code {
+                                    (strings.token_expired_title, strings.token_expired_body)
+                                } else if s.show_codex {
+                                    (
+                                        strings.codex_token_expired_title,
+                                        strings.codex_token_expired_body,
+                                    )
+                                } else {
+                                    (
+                                        strings.antigravity_token_expired_title,
+                                        strings.antigravity_token_expired_body,
+                                    )
+                                });
+                            }
                             s.auth_error_paused_polling = true;
                             s.auth_watch_mode = watch_mode;
                             s.auth_watch_snapshot = watch_snapshot;
@@ -1801,6 +1824,11 @@ fn do_poll(send_hwnd: SendHwnd) {
                         }
                     }
                 }
+                notify
+            };
+
+            if let Some((title, body)) = notify_auth_error {
+                toast::notify(title, body);
             }
 
             unsafe {
