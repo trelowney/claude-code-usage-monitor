@@ -1699,16 +1699,19 @@ fn paint_content(
 /// usage isn't interesting.
 const RESET_NOTIFY_THRESHOLD: f64 = 50.0;
 
-/// True if `current`'s reset timestamp is later than `previous`'s (i.e. the
-/// window actually rolled over to a new period since the last poll) and
-/// `previous` was above the notify threshold right before that happened.
+/// A window that just reset should read close to empty. Requiring the new
+/// reading to be well below the notify threshold (rather than merely lower
+/// than before) avoids mistaking ordinary fluctuation for a reset.
+const RESET_LOW_WATERMARK: f64 = 20.0;
+
+/// True if usage just dropped from a high value to a low one, which is what
+/// an actual window reset looks like. Deliberately does NOT use `resets_at`
+/// as the signal: that timestamp is a server-side estimate that can shift
+/// between polls (e.g. when the poller falls back to a different data
+/// source - see poller.rs) without an actual reset happening, which caused
+/// false-positive notifications when this was tried.
 fn window_just_reset(previous: &UsageSection, current: &UsageSection, threshold: f64) -> bool {
-    match (previous.resets_at, current.resets_at) {
-        (Some(prev_reset), Some(new_reset)) => {
-            new_reset > prev_reset && previous.percentage > threshold
-        }
-        _ => false,
-    }
+    previous.percentage > threshold && current.percentage < RESET_LOW_WATERMARK
 }
 
 /// Append (title, body) toast pairs for any session/weekly window that just

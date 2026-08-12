@@ -25,5 +25,8 @@ Desktop.ini
 workflow.cmd
 AGENTS.md
 
+# Personal dev notes - not for the public repo
+NOTES.md
+
 # Local WinGet manifest generation output
 /manifests/
