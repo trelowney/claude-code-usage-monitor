@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use windows::core::PCWSTR;
@@ -20,12 +20,11 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
-    self, Color, TIMER_COUNTDOWN, TIMER_POLL, TIMER_RESET_POLL, TIMER_UPDATE_CHECK, WM_APP_TRAY,
+    self, Color, TIMER_COUNTDOWN, TIMER_POLL, TIMER_RESET_POLL, TIMER_UPDATE_CHECK,
     WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::theme;
-use crate::tray_icon;
 use crate::updater::{self, InstallChannel, ReleaseDescriptor, UpdateCheckResult};
 
 /// Wrapper to make HWND sendable across threads (safe for PostMessage usage)
@@ -75,7 +74,6 @@ struct AppState {
 
     poll_interval_ms: u32,
     retry_count: u32,
-    force_notify_auth_error: bool,
     auth_error_paused_polling: bool,
     auth_watch_mode: poller::CredentialWatchMode,
     auth_watch_snapshot: poller::CredentialWatchSnapshot,
@@ -132,16 +130,14 @@ const IDM_LANG_SIMPLIFIED_CHINESE: u16 = 51;
 const IDM_MODEL_CLAUDE_CODE: u16 = 60;
 const IDM_MODEL_CODEX: u16 = 61;
 const IDM_MODEL_ANTIGRAVITY: u16 = 62;
+const IDM_TOGGLE_WIDGET: u16 = 70;
 
 const WM_DPICHANGED_MSG: u32 = 0x02E0;
 const WM_APP_UPDATE_CHECK_COMPLETE: u32 = WM_APP + 2;
-const TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS: u64 = 750;
 
 /// How often the watchdog thread polls for an explorer.exe restart (which
-/// recreates the taskbar and wipes our tray-icon registration).
+/// recreates the taskbar).
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
-
-static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Current system DPI (96 = 100% scaling, 144 = 150%, 192 = 200%, etc.)
 static CURRENT_DPI: AtomicU32 = AtomicU32::new(96);
@@ -396,83 +392,6 @@ fn save_state_settings() {
     }
 }
 
-fn tray_icon_data_from_state() -> Vec<tray_icon::TrayIconData> {
-    let state = lock_state();
-    match state.as_ref() {
-        Some(s) if s.last_poll_ok => {
-            let mut icons = Vec::new();
-            if s.show_claude_code {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Claude,
-                    percent: Some(s.session_percent),
-                    tooltip: format!(
-                        "{} 5h: {} | 7d: {}",
-                        s.language.strings().claude_code_model,
-                        s.session_text,
-                        s.weekly_text
-                    ),
-                });
-            }
-            if s.show_codex {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Codex,
-                    percent: Some(s.codex_session_percent),
-                    tooltip: format!(
-                        "{} 5h: {} | 7d: {}",
-                        s.language.strings().codex_model,
-                        s.codex_session_text,
-                        s.codex_weekly_text
-                    ),
-                });
-            }
-            if s.show_antigravity {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Antigravity,
-                    percent: Some(s.antigravity_session_percent),
-                    tooltip: format!(
-                        "{} 5h: {} | 7d: {}",
-                        s.language.strings().antigravity_model,
-                        s.antigravity_session_text,
-                        s.antigravity_weekly_text
-                    ),
-                });
-            }
-            icons
-        }
-        Some(s) => {
-            let mut icons = Vec::new();
-            if s.show_claude_code {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Claude,
-                    percent: None,
-                    tooltip: s.language.strings().window_title.to_string(),
-                });
-            }
-            if s.show_codex {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Codex,
-                    percent: None,
-                    tooltip: s.language.strings().codex_window_title.to_string(),
-                });
-            }
-            if s.show_antigravity {
-                icons.push(tray_icon::TrayIconData {
-                    kind: tray_icon::TrayIconKind::Antigravity,
-                    percent: None,
-                    tooltip: s.language.strings().antigravity_window_title.to_string(),
-                });
-            }
-            icons
-        }
-        None => Vec::new(),
-    }
-}
-
-fn sync_tray_icons(hwnd: HWND) {
-    let icons = tray_icon_data_from_state();
-    tray_icon::sync(hwnd, &icons);
-}
-
 fn toggle_widget_visibility(hwnd: HWND) {
     let new_visible = {
         let mut state = lock_state();
@@ -586,10 +505,10 @@ fn offset_for_drop_point(
     pt: POINT,
     drag_start_client_x: i32,
 ) -> i32 {
-    let tray_left = tray_left_for_taskbar(taskbar_hwnd, taskbar_rect);
+    // Widget is anchored to the left edge of the taskbar; offset is the
+    // desired distance of its left edge from that anchor.
     let desired_left = pt.x - taskbar_rect.left - drag_start_client_x;
-    let offset = tray_left - taskbar_rect.left - total_widget_width() - desired_left;
-    clamp_offset_for_taskbar(taskbar_hwnd, taskbar_rect, offset)
+    clamp_offset_for_taskbar(taskbar_hwnd, taskbar_rect, desired_left)
 }
 
 fn now_unix_secs() -> u64 {
@@ -1314,7 +1233,6 @@ pub fn run() {
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
                 retry_count: 0,
-                force_notify_auth_error: false,
                 auth_error_paused_polling: false,
                 auth_watch_mode: poller::CredentialWatchMode::ActiveSource,
                 auth_watch_snapshot: Vec::new(),
@@ -1349,9 +1267,6 @@ pub fn run() {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
-
-        // Register system tray icon(s)
-        sync_tray_icons(hwnd);
 
         // Position and show (only if widget_visible preference is true)
         position_at_taskbar();
@@ -1810,7 +1725,6 @@ fn do_poll(send_hwnd: SendHwnd) {
                         SetTimer(hwnd, TIMER_POLL, interval, None);
                     }
                 }
-                s.force_notify_auth_error = false;
                 s.auth_error_paused_polling = false;
                 s.auth_watch_mode = poller::CredentialWatchMode::ActiveSource;
                 s.auth_watch_snapshot.clear();
@@ -1841,18 +1755,12 @@ fn do_poll(send_hwnd: SendHwnd) {
                 poller::PollError::RequestFailed => None,
             };
             // Distinguish auth-required errors from transient errors.
-            let notify_auth_error = {
+            {
                 let mut state = lock_state();
-                let mut should_notify = false;
                 if let Some(s) = state.as_mut() {
                     s.last_poll_ok = false;
                     match auth_watch {
                         Some((watch_mode, watch_snapshot)) => {
-                            // Only show the balloon on the first failure so it doesn't spam.
-                            if s.retry_count == 0 || s.force_notify_auth_error {
-                                should_notify = true;
-                            }
-                            s.force_notify_auth_error = false;
                             s.auth_error_paused_polling = true;
                             s.auth_watch_mode = watch_mode;
                             s.auth_watch_snapshot = watch_snapshot;
@@ -1872,7 +1780,6 @@ fn do_poll(send_hwnd: SendHwnd) {
                         }
                         _ => {
                             // Transient network / credential-missing errors: exponential backoff.
-                            s.force_notify_auth_error = false;
                             s.auth_error_paused_polling = false;
                             s.auth_watch_mode = poller::CredentialWatchMode::ActiveSource;
                             s.auth_watch_snapshot.clear();
@@ -1893,40 +1800,6 @@ fn do_poll(send_hwnd: SendHwnd) {
                             }
                         }
                     }
-                }
-                should_notify
-            };
-
-            if notify_auth_error {
-                let balloon = {
-                    let state = lock_state();
-                    state.as_ref().map(|s| {
-                        if s.show_claude_code {
-                            (
-                                s.language.strings(),
-                                tray_icon::TrayIconKind::Claude,
-                                s.language.strings().token_expired_title,
-                                s.language.strings().token_expired_body,
-                            )
-                        } else if s.show_codex {
-                            (
-                                s.language.strings(),
-                                tray_icon::TrayIconKind::Codex,
-                                s.language.strings().codex_token_expired_title,
-                                s.language.strings().codex_token_expired_body,
-                            )
-                        } else {
-                            (
-                                s.language.strings(),
-                                tray_icon::TrayIconKind::Antigravity,
-                                s.language.strings().antigravity_token_expired_title,
-                                s.language.strings().antigravity_token_expired_body,
-                            )
-                        }
-                    })
-                };
-                if let Some((_strings, kind, title, body)) = balloon {
-                    tray_icon::notify_balloon(hwnd, kind, title, body);
                 }
             }
 
@@ -2038,29 +1911,6 @@ fn update_display() {
     refresh_usage_texts(s);
 }
 
-fn suppress_tray_reposition_for(duration: Duration) {
-    let mut until = SUPPRESS_TRAY_REPOSITION_UNTIL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *until = Some(Instant::now() + duration);
-}
-
-fn tray_reposition_is_suppressed() -> bool {
-    let now = Instant::now();
-    let mut until = SUPPRESS_TRAY_REPOSITION_UNTIL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    match *until {
-        Some(deadline) if now < deadline => true,
-        Some(_) => {
-            *until = None;
-            false
-        }
-        None => false,
-    }
-}
-
 fn position_at_taskbar() {
     refresh_dpi();
     // Drop the app-state lock before any Win32 call that may synchronously
@@ -2130,8 +1980,9 @@ fn position_at_taskbar() {
     let widget_height = sc(WIDGET_HEIGHT);
     let y = compute_anchor_y(anchor_top, anchor_height, widget_height);
     if embedded {
-        // Child window: coordinates relative to parent (taskbar)
-        let x = tray_left - taskbar_rect.left - widget_width - tray_offset;
+        // Child window: coordinates relative to parent (taskbar). Anchored to
+        // the taskbar's own left edge (local x=0) instead of the tray.
+        let x = tray_offset;
         native_interop::move_window(hwnd, x, y - taskbar_rect.top, widget_width, widget_height);
         diagnose::log(format!(
             "positioned embedded widget at x={x} y={} w={widget_width} h={widget_height}",
@@ -2139,7 +1990,7 @@ fn position_at_taskbar() {
         ));
     } else {
         // Topmost popup: screen coordinates
-        let x = tray_left - widget_width - tray_offset;
+        let x = taskbar_rect.left + tray_offset;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
         diagnose::log(format!(
             "positioned fallback widget at x={x} y={y} w={widget_width} h={widget_height}"
@@ -2174,10 +2025,6 @@ unsafe extern "system" fn on_tray_location_changed(
     };
 
     if is_tray {
-        if tray_reposition_is_suppressed() {
-            return;
-        }
-
         let should_reposition = {
             let mut last = LAST_REPOSITION.lock().unwrap_or_else(|e| e.into_inner());
             let now = std::time::Instant::now();
@@ -2314,10 +2161,6 @@ unsafe extern "system" fn wnd_proc(
             check_language_change();
             render_layered();
             schedule_countdown_timer();
-            suppress_tray_reposition_for(Duration::from_millis(
-                TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS,
-            ));
-            sync_tray_icons(hwnd);
             LRESULT(0)
         }
         WM_APP_UPDATE_CHECK_COMPLETE => {
@@ -2375,11 +2218,12 @@ unsafe extern "system" fn wnd_proc(
                         None => return LRESULT(0),
                     };
 
-                    // Moving mouse left = positive delta = larger offset (further left)
-                    let delta = s.drag_start_mouse_x - pt.x;
+                    // Widget is anchored to the taskbar's left edge. Moving the
+                    // mouse right = positive delta = larger offset (further right).
+                    let delta = pt.x - s.drag_start_mouse_x;
                     let mut new_offset = s.drag_start_offset + delta;
 
-                    // Clamp: offset >= 0 (can't go right of default)
+                    // Clamp: offset >= 0 (can't go left of the taskbar's edge)
                     if new_offset < 0 {
                         new_offset = 0;
                     }
@@ -2388,7 +2232,7 @@ unsafe extern "system" fn wnd_proc(
                     let embedded = s.embedded;
                     let hwnd_val = s.hwnd.to_hwnd();
 
-                    // Clamp: don't go past left edge of taskbar
+                    // Clamp: don't go past the system tray on the right
                     if let Some(taskbar_hwnd) = taskbar_hwnd {
                         if let Some(taskbar_rect) = native_interop::get_taskbar_rect(taskbar_hwnd) {
                             let mut tray_left = taskbar_rect.right;
@@ -2415,9 +2259,9 @@ unsafe extern "system" fn wnd_proc(
                             let widget_height = sc(WIDGET_HEIGHT);
                             let y = compute_anchor_y(anchor_top, anchor_height, widget_height);
                             let x = if embedded {
-                                tray_left - taskbar_rect.left - widget_width - new_offset
+                                new_offset
                             } else {
-                                tray_left - widget_width - new_offset
+                                taskbar_rect.left + new_offset
                             };
                             Some((
                                 hwnd_val,
@@ -2513,7 +2357,6 @@ unsafe extern "system" fn wnd_proc(
                             s.weekly_text = "...".to_string();
                             s.codex_session_text = "...".to_string();
                             s.codex_weekly_text = "...".to_string();
-                            s.force_notify_auth_error = true;
                         }
                     }
                     render_layered();
@@ -2628,7 +2471,6 @@ unsafe extern "system" fn wnd_proc(
                     save_state_settings();
                     position_at_taskbar();
                     render_layered();
-                    sync_tray_icons(hwnd);
                     let sh = SendHwnd::from_hwnd(hwnd);
                     std::thread::spawn(move || {
                         do_poll(sh);
@@ -2670,22 +2512,10 @@ unsafe extern "system" fn wnd_proc(
                     save_state_settings();
                     render_layered();
                 }
-                id if id == tray_icon::IDM_TOGGLE_WIDGET => {
+                id if id == IDM_TOGGLE_WIDGET => {
                     toggle_widget_visibility(hwnd);
                 }
                 _ => {}
-            }
-            LRESULT(0)
-        }
-        _ if msg == WM_APP_TRAY => {
-            match tray_icon::handle_message(lparam) {
-                tray_icon::TrayAction::ToggleWidget => {
-                    toggle_widget_visibility(hwnd);
-                }
-                tray_icon::TrayAction::ShowContextMenu => {
-                    show_context_menu(hwnd);
-                }
-                tray_icon::TrayAction::None => {}
             }
             LRESULT(0)
         }
@@ -2697,7 +2527,6 @@ unsafe extern "system" fn wnd_proc(
             if let Some(h) = hook {
                 native_interop::unhook_win_event(h);
             }
-            tray_icon::remove_all(hwnd);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -2949,7 +2778,7 @@ fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(
             menu,
             widget_flags,
-            tray_icon::IDM_TOGGLE_WIDGET as usize,
+            IDM_TOGGLE_WIDGET as usize,
             PCWSTR::from_raw(widget_label.as_ptr()),
         );
 
