@@ -3,7 +3,9 @@
 
 # Claude Usage Monitor (trelowney's build)
 
-Private fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor), docked to the left of the taskbar with no tray icons and no auto-update.
+Private fork of [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) at their [`v1.4.9`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v1.4.9) release (commit `7b108da`), docked to the left of the taskbar with no tray icons and no auto-update.
+
+Version numbers here follow `<upstream version>-trelowney.<build>`, so you can tell at a glance which upstream release this is based on. To check whether upstream has moved on since then, compare against their [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest).
 
 ![Screenshot](.github/animation.gif)
 
