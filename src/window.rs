@@ -1714,9 +1714,22 @@ fn window_just_reset(previous: &UsageSection, current: &UsageSection, threshold:
     previous.percentage > threshold && current.percentage < RESET_LOW_WATERMARK
 }
 
+/// True if usage just crossed from below `threshold` to at-or-above it.
+/// Since usage only climbs within a window (it can't decrease except on
+/// reset, which drops it far below any sane threshold), this fires exactly
+/// once per window per crossing - no separate "already warned" flag needed.
+fn window_just_crossed_high_usage(
+    previous: &UsageSection,
+    current: &UsageSection,
+    threshold: f64,
+) -> bool {
+    previous.percentage < threshold && current.percentage >= threshold
+}
+
 /// Append (title, body) toast pairs for any session/weekly window that just
-/// reset while it was above `RESET_NOTIFY_THRESHOLD`.
-fn collect_reset_notifications(
+/// reset while it was above `RESET_NOTIFY_THRESHOLD`, or that just crossed
+/// `HIGH_USAGE_THRESHOLD` (the same threshold the bar segments turn red at).
+fn collect_usage_notifications(
     out: &mut Vec<(String, String)>,
     strings: Strings,
     model_name: &str,
@@ -1737,6 +1750,18 @@ fn collect_reset_notifications(
         out.push((
             strings.weekly_reset_title.to_string(),
             strings.weekly_reset_body.replace("{model}", model_name),
+        ));
+    }
+    if window_just_crossed_high_usage(&previous.session, &current.session, HIGH_USAGE_THRESHOLD) {
+        out.push((
+            strings.session_high_usage_title.to_string(),
+            strings.session_high_usage_body.replace("{model}", model_name),
+        ));
+    }
+    if window_just_crossed_high_usage(&previous.weekly, &current.weekly, HIGH_USAGE_THRESHOLD) {
+        out.push((
+            strings.weekly_high_usage_title.to_string(),
+            strings.weekly_high_usage_body.replace("{model}", model_name),
         ));
     }
 }
@@ -1762,7 +1787,7 @@ fn do_poll(send_hwnd: SendHwnd) {
 
                 if let Some(claude_code) = data.claude_code.as_ref() {
                     if s.show_claude_code {
-                        collect_reset_notifications(
+                        collect_usage_notifications(
                             &mut reset_notifications,
                             strings,
                             strings.claude_code_model,
@@ -1778,7 +1803,7 @@ fn do_poll(send_hwnd: SendHwnd) {
                 }
                 if let Some(codex) = data.codex.as_ref() {
                     if s.show_codex {
-                        collect_reset_notifications(
+                        collect_usage_notifications(
                             &mut reset_notifications,
                             strings,
                             strings.codex_model,
@@ -1794,7 +1819,7 @@ fn do_poll(send_hwnd: SendHwnd) {
                 }
                 if let Some(antigravity) = data.antigravity.as_ref() {
                     if s.show_antigravity {
-                        collect_reset_notifications(
+                        collect_usage_notifications(
                             &mut reset_notifications,
                             strings,
                             strings.antigravity_model,

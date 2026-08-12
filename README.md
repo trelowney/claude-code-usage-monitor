@@ -5,13 +5,14 @@
 
 This is [CodeZeno](https://codezeno.com.au)'s **Claude Code Usage Monitor** — all credit for the app itself, its design, and everything it does goes to them. See the [original repository](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) for the full feature list, privacy/security details, and how it all works.
 
-This is a private fork, forked from their [`v1.4.9`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v1.4.9) release (commit `7b108da`), with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
+This is a personal fork, forked from their [`v1.4.9`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v1.4.9) release (commit `7b108da`), with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
 
 ## What's different in this fork
 
 - **Widget docks to the left edge of the taskbar** instead of next to the system tray, so it doesn't cover pinned/running app icons on a busy taskbar.
 - **No system tray icons** — the percentage badges near the clock are gone; the widget itself already shows the same numbers.
-- **Toast notifications** for auth/token expiry (Action Center, bottom-right) instead of a tray balloon, since there's no tray icon left to hang a balloon off of.
+- **Usage bar segments turn red above 80%** for the 5-hour and 7-day windows, independently, for every enabled model.
+- **Toast notifications** (Action Center, bottom-right) for: auth/token expiry, crossing 80% usage, and a session/weekly window resetting after being above 50% — instead of the old tray balloon, since there's no tray icon left to hang one off of.
 - **Auto-updater points at [this repo's releases](https://github.com/trelowney/claude-code-usage-monitor/releases)** instead of upstream's, so it won't ever offer to replace this build with upstream's unmodified one.
 - Rebranded binary/window title/menu so it's obvious this is the custom build, not upstream.
 

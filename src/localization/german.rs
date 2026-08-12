@@ -49,4 +49,8 @@ pub(super) const STRINGS: Strings = Strings {
     session_reset_body: "Ihr {model}-5-Stunden-Nutzungsfenster wurde zurückgesetzt.",
     weekly_reset_title: "7-Tage-Nutzung zurückgesetzt",
     weekly_reset_body: "Ihr {model}-7-Tage-Nutzungsfenster wurde zurückgesetzt.",
+    session_high_usage_title: "5-Stunden-Nutzungswarnung",
+    session_high_usage_body: "Ihre {model}-5-Stunden-Nutzung hat 80 % überschritten.",
+    weekly_high_usage_title: "7-Tage-Nutzungswarnung",
+    weekly_high_usage_body: "Ihre {model}-7-Tage-Nutzung hat 80 % überschritten.",
 };

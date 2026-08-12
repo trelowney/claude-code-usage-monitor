@@ -191,6 +191,10 @@ pub struct Strings {
     pub session_reset_body: &'static str,
     pub weekly_reset_title: &'static str,
     pub weekly_reset_body: &'static str,
+    pub session_high_usage_title: &'static str,
+    pub session_high_usage_body: &'static str,
+    pub weekly_high_usage_title: &'static str,
+    pub weekly_high_usage_body: &'static str,
 }
 
 pub fn resolve_language(language_override: Option<LanguageId>) -> LanguageId {

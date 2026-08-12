@@ -49,4 +49,8 @@ pub(super) const STRINGS: Strings = Strings {
     session_reset_body: "您的 {model} 5 小时用量窗口已重置。",
     weekly_reset_title: "7 天用量已重置",
     weekly_reset_body: "您的 {model} 7 天用量窗口已重置。",
+    session_high_usage_title: "5 小时用量警告",
+    session_high_usage_body: "您的 {model} 5 小时用量已超过 80%。",
+    weekly_high_usage_title: "7 天用量警告",
+    weekly_high_usage_body: "您的 {model} 7 天用量已超过 80%。",
 };

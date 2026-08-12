@@ -49,4 +49,8 @@ pub(super) const STRINGS: Strings = Strings {
     session_reset_body: "{model}의 5시간 사용량 창이 초기화되었습니다.",
     weekly_reset_title: "7일 사용량 초기화",
     weekly_reset_body: "{model}의 7일 사용량 창이 초기화되었습니다.",
+    session_high_usage_title: "5시간 사용량 경고",
+    session_high_usage_body: "{model}의 5시간 사용량이 80%를 초과했습니다.",
+    weekly_high_usage_title: "7일 사용량 경고",
+    weekly_high_usage_body: "{model}의 7일 사용량이 80%를 초과했습니다.",
 };

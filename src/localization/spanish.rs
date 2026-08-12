@@ -49,4 +49,8 @@ pub(super) const STRINGS: Strings = Strings {
     session_reset_body: "Tu ventana de uso de 5 horas de {model} se ha reiniciado.",
     weekly_reset_title: "Uso de 7 días reiniciado",
     weekly_reset_body: "Tu ventana de uso de 7 días de {model} se ha reiniciado.",
+    session_high_usage_title: "Advertencia de uso de 5 horas",
+    session_high_usage_body: "Tu uso de 5 horas de {model} ha superado el 80%.",
+    weekly_high_usage_title: "Advertencia de uso de 7 días",
+    weekly_high_usage_body: "Tu uso de 7 días de {model} ha superado el 80%.",
 };
