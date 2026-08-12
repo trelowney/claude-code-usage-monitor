@@ -1,35 +1,33 @@
 //! Native Windows Action Center toast notifications for this unpackaged
 //! (non-MSIX) app. Toasts from a plain Win32 exe require an App User Model ID
-//! (AUMID) that is registered via a Start Menu shortcut carrying that same
-//! AUMID as a property - without it, `ToastNotificationManager` silently
-//! fails to show anything on most Windows 10/11 builds.
+//! (AUMID) that Windows can resolve to a display name - without registering
+//! one, `ToastNotificationManager` silently drops the notification. This
+//! registers the AUMID under `HKCU\Software\Classes\AppUserModelId\<AUMID>`
+//! (the same registry-only technique used by other unpackaged-app toast
+//! libraries), which avoids needing a Start Menu shortcut at all.
 
-use windows::core::{Interface, HSTRING, PCWSTR};
+use windows::core::HSTRING;
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows::Win32::System::Com::StructuredStorage::{InitPropVariantFromString, PropVariantClear};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, IPersistFile,
-};
-use windows::Win32::Foundation::TRUE;
-use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
-use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PKEY_AppUserModel_ID, PKEY_Title};
-use windows::Win32::UI::Shell::{IShellLinkW, SetCurrentProcessExplicitAppUserModelID, ShellLink};
+use windows::Win32::System::Registry::*;
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+
+use crate::native_interop;
 
 const AUMID: &str = "trelowney.ClaudeUsageMonitor";
-const SHORTCUT_NAME: &str = "Claude Usage Monitor (trelowney).lnk";
+const AUMID_REGISTRY_PATH: &str = r"Software\Classes\AppUserModelId\trelowney.ClaudeUsageMonitor";
+const DISPLAY_NAME: &str = "Claude Usage Monitor (trelowney)";
 
-/// Set the process AUMID and make sure a Start Menu shortcut carrying that
-/// AUMID exists, so `notify` below can actually show toasts. Best-effort:
-/// failures are logged and otherwise ignored, since notifications are not
-/// critical to the app's core function.
+/// Set the process AUMID and register it with Windows so `notify` below can
+/// actually show toasts. Best-effort: failures are logged and otherwise
+/// ignored, since notifications are not critical to the app's core function.
 pub fn init() {
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(AUMID));
     }
 
-    if let Err(error) = ensure_shortcut() {
-        crate::diagnose::log(format!("toast: unable to register shortcut/AUMID: {error}"));
+    if let Err(error) = register_aumid() {
+        crate::diagnose::log(format!("toast: unable to register AUMID: {error}"));
     }
 }
 
@@ -63,85 +61,43 @@ fn xml_escape(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn shortcut_path() -> Result<std::path::PathBuf, String> {
-    let appdata = std::env::var("APPDATA").map_err(|e| format!("no APPDATA: {e}"))?;
-    Ok(std::path::PathBuf::from(appdata)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Start Menu")
-        .join("Programs")
-        .join(SHORTCUT_NAME))
-}
-
-fn current_exe_wide() -> Result<Vec<u16>, String> {
-    let mut buf = [0u16; 260];
-    let len = unsafe { GetModuleFileNameW(None, &mut buf) } as usize;
-    if len == 0 {
-        return Err("unable to resolve current executable path".to_string());
-    }
-    let mut wide: Vec<u16> = buf[..len].to_vec();
-    wide.push(0);
-    Ok(wide)
-}
-
-/// Create (or refresh) the Start Menu shortcut that registers this app's
-/// AUMID with the shell, which is required for `ToastNotificationManager` to
-/// deliver notifications from an unpackaged executable.
-fn ensure_shortcut() -> Result<(), String> {
-    let path = shortcut_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create Start Menu dir: {e}"))?;
-    }
-
-    let exe_wide = current_exe_wide()?;
-    let shortcut_wide: Vec<u16> = path
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let title_wide: Vec<u16> = "Claude Usage Monitor"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let aumid_wide: Vec<u16> = AUMID.encode_utf16().chain(std::iter::once(0)).collect();
-
+/// Write `HKCU\Software\Classes\AppUserModelId\<AUMID>\DisplayName`, which is
+/// enough for Windows to accept toasts sent under that AUMID and show a
+/// sensible name for them in Action Center / notification settings.
+fn register_aumid() -> Result<(), String> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let path = native_interop::wide_str(AUMID_REGISTRY_PATH);
+        let mut hkey = HKEY::default();
+        let result = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            windows::core::PCWSTR::from_raw(path.as_ptr()),
+            None,
+            windows::core::PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            None,
+            &mut hkey,
+            None,
+        );
+        if result.is_err() {
+            return Err(format!("RegCreateKeyExW failed: {result:?}"));
+        }
 
-        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("CoCreateInstance(ShellLink): {e}"))?;
-
-        shell_link
-            .SetPath(PCWSTR::from_raw(exe_wide.as_ptr()))
-            .map_err(|e| format!("SetPath: {e}"))?;
-
-        let property_store: IPropertyStore = shell_link
-            .cast()
-            .map_err(|e| format!("cast IPropertyStore: {e}"))?;
-
-        let mut aumid_variant = InitPropVariantFromString(PCWSTR::from_raw(aumid_wide.as_ptr()))
-            .map_err(|e| format!("InitPropVariantFromString(aumid): {e}"))?;
-        property_store
-            .SetValue(&PKEY_AppUserModel_ID, &aumid_variant)
-            .map_err(|e| format!("SetValue(AppUserModel_ID): {e}"))?;
-        let _ = PropVariantClear(&mut aumid_variant);
-
-        let mut title_variant = InitPropVariantFromString(PCWSTR::from_raw(title_wide.as_ptr()))
-            .map_err(|e| format!("InitPropVariantFromString(title): {e}"))?;
-        property_store
-            .SetValue(&PKEY_Title, &title_variant)
-            .map_err(|e| format!("SetValue(Title): {e}"))?;
-        let _ = PropVariantClear(&mut title_variant);
-
-        property_store.Commit().map_err(|e| format!("Commit: {e}"))?;
-
-        let persist_file: IPersistFile = shell_link
-            .cast()
-            .map_err(|e| format!("cast IPersistFile: {e}"))?;
-        persist_file
-            .Save(PCWSTR::from_raw(shortcut_wide.as_ptr()), TRUE)
-            .map_err(|e| format!("Save: {e}"))?;
+        let value_name = native_interop::wide_str("DisplayName");
+        let value_data = native_interop::wide_str(DISPLAY_NAME);
+        let data_bytes =
+            std::slice::from_raw_parts(value_data.as_ptr() as *const u8, value_data.len() * 2);
+        let result = RegSetValueExW(
+            hkey,
+            windows::core::PCWSTR::from_raw(value_name.as_ptr()),
+            0,
+            REG_SZ,
+            Some(data_bytes),
+        );
+        let _ = RegCloseKey(hkey);
+        if result.is_err() {
+            return Err(format!("RegSetValueExW failed: {result:?}"));
+        }
+        Ok(())
     }
-
-    Ok(())
 }

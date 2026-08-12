@@ -47,4 +47,8 @@ pub(super) const STRINGS: Strings = Strings {
     antigravity_token_expired_body: "Abra o Antigravity e entre novamente. Depois disso, atualize ou reinicie este aplicativo.",
     codex_window_title: "Monitor de uso do Codex",
     antigravity_window_title: "Monitor de uso do Antigravity",
+    session_reset_title: "Uso de 5 horas reiniciado",
+    session_reset_body: "Sua janela de uso de 5 horas do {model} foi reiniciada.",
+    weekly_reset_title: "Uso de 7 dias reiniciado",
+    weekly_reset_body: "Sua janela de uso de 7 dias do {model} foi reiniciada.",
 };

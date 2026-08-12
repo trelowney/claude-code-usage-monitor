@@ -47,4 +47,8 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Codex 사용량 모니터",
     antigravity_window_title: "Antigravity 사용량 모니터",
     second_suffix: "초",
+    session_reset_title: "5시간 사용량 초기화",
+    session_reset_body: "{model}의 5시간 사용량 창이 초기화되었습니다.",
+    weekly_reset_title: "7일 사용량 초기화",
+    weekly_reset_body: "{model}의 7일 사용량 창이 초기화되었습니다.",
 };

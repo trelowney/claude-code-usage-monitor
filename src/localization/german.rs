@@ -47,4 +47,8 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Codex-Nutzungsmonitor",
     antigravity_window_title: "Antigravity-Nutzungsmonitor",
     second_suffix: "s",
+    session_reset_title: "5-Stunden-Nutzung zurückgesetzt",
+    session_reset_body: "Ihr {model}-5-Stunden-Nutzungsfenster wurde zurückgesetzt.",
+    weekly_reset_title: "7-Tage-Nutzung zurückgesetzt",
+    weekly_reset_body: "Ihr {model}-7-Tage-Nutzungsfenster wurde zurückgesetzt.",
 };

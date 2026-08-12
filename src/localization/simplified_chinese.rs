@@ -47,4 +47,8 @@ pub(super) const STRINGS: Strings = Strings {
     codex_window_title: "Codex 使用量监控",
     antigravity_window_title: "Antigravity 使用量监控",
     second_suffix: "秒",
+    session_reset_title: "5 小时用量已重置",
+    session_reset_body: "您的 {model} 5 小时用量窗口已重置。",
+    weekly_reset_title: "7 天用量已重置",
+    weekly_reset_body: "您的 {model} 7 天用量窗口已重置。",
 };

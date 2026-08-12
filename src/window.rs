@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
-use crate::models::AppUsageData;
+use crate::models::{AppUsageData, UsageData, UsageSection};
 use crate::native_interop::{
     self, Color, TIMER_COUNTDOWN, TIMER_POLL, TIMER_RESET_POLL, TIMER_UPDATE_CHECK,
     WM_APP_USAGE_UPDATED,
@@ -1062,6 +1062,14 @@ fn antigravity_accent_color() -> Color {
     Color::from_hex("#4285F4")
 }
 
+/// Usage percentage at or above which a bar's segments turn red regardless
+/// of the model's normal accent color, as a hard "you're almost out" cue.
+const HIGH_USAGE_THRESHOLD: f64 = 80.0;
+
+fn high_usage_color() -> Color {
+    Color::from_hex("#DC2626")
+}
+
 fn claude_usage_text_color(is_dark: bool) -> Color {
     if is_dark {
         Color::from_hex("#F09A7A")
@@ -1676,6 +1684,50 @@ fn paint_content(
     }
 }
 
+/// Usage percentage a window must have been at (just before it reset) for
+/// the reset to be worth a toast notification - a window that reset at 5%
+/// usage isn't interesting.
+const RESET_NOTIFY_THRESHOLD: f64 = 50.0;
+
+/// True if `current`'s reset timestamp is later than `previous`'s (i.e. the
+/// window actually rolled over to a new period since the last poll) and
+/// `previous` was above the notify threshold right before that happened.
+fn window_just_reset(previous: &UsageSection, current: &UsageSection, threshold: f64) -> bool {
+    match (previous.resets_at, current.resets_at) {
+        (Some(prev_reset), Some(new_reset)) => {
+            new_reset > prev_reset && previous.percentage > threshold
+        }
+        _ => false,
+    }
+}
+
+/// Append (title, body) toast pairs for any session/weekly window that just
+/// reset while it was above `RESET_NOTIFY_THRESHOLD`.
+fn collect_reset_notifications(
+    out: &mut Vec<(String, String)>,
+    strings: Strings,
+    model_name: &str,
+    previous: Option<&UsageData>,
+    current: &UsageData,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+
+    if window_just_reset(&previous.session, &current.session, RESET_NOTIFY_THRESHOLD) {
+        out.push((
+            strings.session_reset_title.to_string(),
+            strings.session_reset_body.replace("{model}", model_name),
+        ));
+    }
+    if window_just_reset(&previous.weekly, &current.weekly, RESET_NOTIFY_THRESHOLD) {
+        out.push((
+            strings.weekly_reset_title.to_string(),
+            strings.weekly_reset_body.replace("{model}", model_name),
+        ));
+    }
+}
+
 fn do_poll(send_hwnd: SendHwnd) {
     let hwnd = send_hwnd.to_hwnd();
     let (show_claude_code, show_codex, show_antigravity) = {
@@ -1688,9 +1740,23 @@ fn do_poll(send_hwnd: SendHwnd) {
 
     match poller::poll(show_claude_code, show_codex, show_antigravity) {
         Ok(data) => {
-            let mut state = lock_state();
-            if let Some(s) = state.as_mut() {
+            let mut reset_notifications: Vec<(String, String)> = Vec::new();
+            {
+                let mut state = lock_state();
+                if let Some(s) = state.as_mut() {
+                let strings = s.language.strings();
+                let previous = s.data.as_ref();
+
                 if let Some(claude_code) = data.claude_code.as_ref() {
+                    if s.show_claude_code {
+                        collect_reset_notifications(
+                            &mut reset_notifications,
+                            strings,
+                            strings.claude_code_model,
+                            previous.and_then(|d| d.claude_code.as_ref()),
+                            claude_code,
+                        );
+                    }
                     s.session_percent = claude_code.session.percentage;
                     s.weekly_percent = claude_code.weekly.percentage;
                 } else if s.show_claude_code {
@@ -1698,6 +1764,15 @@ fn do_poll(send_hwnd: SendHwnd) {
                     s.weekly_percent = 0.0;
                 }
                 if let Some(codex) = data.codex.as_ref() {
+                    if s.show_codex {
+                        collect_reset_notifications(
+                            &mut reset_notifications,
+                            strings,
+                            strings.codex_model,
+                            previous.and_then(|d| d.codex.as_ref()),
+                            codex,
+                        );
+                    }
                     s.codex_session_percent = codex.session.percentage;
                     s.codex_weekly_percent = codex.weekly.percentage;
                 } else if s.show_codex {
@@ -1705,6 +1780,15 @@ fn do_poll(send_hwnd: SendHwnd) {
                     s.codex_weekly_percent = 0.0;
                 }
                 if let Some(antigravity) = data.antigravity.as_ref() {
+                    if s.show_antigravity {
+                        collect_reset_notifications(
+                            &mut reset_notifications,
+                            strings,
+                            strings.antigravity_model,
+                            previous.and_then(|d| d.antigravity.as_ref()),
+                            antigravity,
+                        );
+                    }
                     s.antigravity_session_percent = antigravity.session.percentage;
                     s.antigravity_weekly_percent = antigravity.weekly.percentage;
                 } else if s.show_antigravity {
@@ -1733,6 +1817,11 @@ fn do_poll(send_hwnd: SendHwnd) {
                 s.auth_error_paused_polling = false;
                 s.auth_watch_mode = poller::CredentialWatchMode::ActiveSource;
                 s.auth_watch_snapshot.clear();
+                }
+            }
+
+            for (title, body) in &reset_notifications {
+                toast::notify(title, body);
             }
 
             unsafe {
@@ -3080,6 +3169,12 @@ fn draw_usage_bar(
     unsafe {
         let percent_clamped = percent.clamp(0.0, 100.0);
         let segment_percent = 100.0 / segment_count as f64;
+        let high_usage = high_usage_color();
+        let fill_color = if percent_clamped >= HIGH_USAGE_THRESHOLD {
+            &high_usage
+        } else {
+            accent
+        };
 
         for i in 0..segment_count {
             let seg_x = bar_x + i * (seg_w + seg_gap);
@@ -3094,7 +3189,7 @@ fn draw_usage_bar(
             };
 
             if percent_clamped >= seg_end {
-                draw_rounded_rect(hdc, &seg_rect, accent, corner_r);
+                draw_rounded_rect(hdc, &seg_rect, fill_color, corner_r);
             } else if percent_clamped <= seg_start {
                 draw_rounded_rect(hdc, &seg_rect, track, corner_r);
             } else {
@@ -3117,7 +3212,7 @@ fn draw_usage_bar(
                         corner_r * 2,
                     );
                     let _ = SelectClipRgn(hdc, rgn);
-                    let brush = CreateSolidBrush(COLORREF(accent.to_colorref()));
+                    let brush = CreateSolidBrush(COLORREF(fill_color.to_colorref()));
                     FillRect(hdc, &fill_rect, brush);
                     let _ = DeleteObject(brush);
                     let _ = SelectClipRgn(hdc, HRGN::default());
