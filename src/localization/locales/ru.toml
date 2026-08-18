@@ -5,7 +5,7 @@ order = 9
 update_via_winget = "Обновить через WinGet"
 
 [strings]
-window_title = "Монитор использования Claude Code"
+window_title = "Монитор использования Claude Code — trelowney"
 refresh = "Обновить"
 update_frequency = "Частота обновления"
 one_minute = "1 минута"
@@ -57,6 +57,14 @@ codex_window_title = "Монитор использования Codex"
 antigravity_window_title = "Монитор использования Antigravity"
 opencode_window_title = "Монитор использования OpenCode"
 cursor_window_title = "Монитор использования Cursor"
+session_reset_title = "Использование за 5 часов сброшено"
+session_reset_body = "Ваше 5-часовое окно использования {model} было сброшено."
+weekly_reset_title = "Использование за 7 дней сброшено"
+weekly_reset_body = "Ваше 7-дневное окно использования {model} было сброшено."
+session_high_usage_title = "Предупреждение об использовании за 5 часов"
+session_high_usage_body = "Использование {model} за 5 часов превысило 80%."
+weekly_high_usage_title = "Предупреждение об использовании за 7 дней"
+weekly_high_usage_body = "Использование {model} за 7 дней превысило 80%."
 
 [translations]
 "Absolute value" = "Абсолютное значение"

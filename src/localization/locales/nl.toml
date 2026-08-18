@@ -5,7 +5,7 @@ order = 1
 update_via_winget = "Bijwerken via WinGet"
 
 [strings]
-window_title = "Claude Code Gebruiksmonitor"
+window_title = "Claude Code Gebruiksmonitor — trelowney"
 refresh = "Vernieuwen"
 update_frequency = "Updatefrequentie"
 one_minute = "1 minuut"
@@ -57,6 +57,14 @@ codex_window_title = "Codex-gebruiksmonitor"
 antigravity_window_title = "Antigravity-gebruiksmonitor"
 opencode_window_title = "OpenCode-gebruiksmonitor"
 cursor_window_title = "Cursor-gebruiksmonitor"
+session_reset_title = "5-uurs gebruik gereset"
+session_reset_body = "Je {model} 5-uursvenster is gereset."
+weekly_reset_title = "7-daags gebruik gereset"
+weekly_reset_body = "Je {model} 7-dagenvenster is gereset."
+session_high_usage_title = "5-uurs gebruikswaarschuwing"
+session_high_usage_body = "Je {model} 5-uursgebruik is boven 80% gekomen."
+weekly_high_usage_title = "7-daagse gebruikswaarschuwing"
+weekly_high_usage_body = "Je {model} 7-dagengebruik is boven 80% gekomen."
 
 [translations]
 "Absolute value" = "Absolute waarde"

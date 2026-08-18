@@ -7,7 +7,7 @@ windows_font_name = "malgun-gothic"
 windows_font_file = "malgun.ttf"
 
 [strings]
-window_title = "Claude Code 사용량 모니터"
+window_title = "Claude Code 사용량 모니터 — trelowney"
 refresh = "새로고침"
 update_frequency = "업데이트 주기"
 one_minute = "1분"
@@ -59,6 +59,14 @@ codex_window_title = "Codex 사용량 모니터"
 antigravity_window_title = "Antigravity 사용량 모니터"
 opencode_window_title = "OpenCode 사용량 모니터"
 cursor_window_title = "Cursor 사용량 모니터"
+session_reset_title = "5시간 사용량 초기화"
+session_reset_body = "{model}의 5시간 사용량 창이 초기화되었습니다."
+weekly_reset_title = "7일 사용량 초기화"
+weekly_reset_body = "{model}의 7일 사용량 창이 초기화되었습니다."
+session_high_usage_title = "5시간 사용량 경고"
+session_high_usage_body = "{model}의 5시간 사용량이 80%를 초과했습니다."
+weekly_high_usage_title = "7일 사용량 경고"
+weekly_high_usage_body = "{model}의 7일 사용량이 80%를 초과했습니다."
 
 [translations]
 "Absolute value" = "절댓값"

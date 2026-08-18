@@ -5,7 +5,7 @@ order = 11
 update_via_winget = "WinGet ile güncelle"
 
 [strings]
-window_title = "Claude Code Kullanım İzleyicisi"
+window_title = "Claude Code Kullanım İzleyicisi — trelowney"
 refresh = "Yenile"
 update_frequency = "Güncelleme Sıklığı"
 one_minute = "1 Dakika"
@@ -57,6 +57,14 @@ codex_window_title = "Codex Kullanım İzleyicisi"
 antigravity_window_title = "Antigravity Kullanım İzleyicisi"
 opencode_window_title = "OpenCode Kullanım İzleyicisi"
 cursor_window_title = "Cursor Kullanım İzleyicisi"
+session_reset_title = "5 Saatlik Kullanım Sıfırlandı"
+session_reset_body = "{model} 5 saatlik kullanım pencereniz sıfırlandı."
+weekly_reset_title = "7 Günlük Kullanım Sıfırlandı"
+weekly_reset_body = "{model} 7 günlük kullanım pencereniz sıfırlandı."
+session_high_usage_title = "5 Saatlik Kullanım Uyarısı"
+session_high_usage_body = "{model} 5 saatlik kullanımınız %80'i geçti."
+weekly_high_usage_title = "7 Günlük Kullanım Uyarısı"
+weekly_high_usage_body = "{model} 7 günlük kullanımınız %80'i geçti."
 
 [translations]
 "Absolute value" = "Mutlak değer"

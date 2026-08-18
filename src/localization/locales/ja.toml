@@ -7,7 +7,7 @@ windows_font_name = "yu-gothic-ui"
 windows_font_file = "YuGothM.ttc"
 
 [strings]
-window_title = "Claude Code 使用量モニター"
+window_title = "Claude Code 使用量モニター — trelowney"
 refresh = "更新"
 update_frequency = "更新間隔"
 one_minute = "1分"
@@ -59,6 +59,14 @@ codex_window_title = "Codex 使用量モニター"
 antigravity_window_title = "Antigravity 使用量モニター"
 opencode_window_title = "OpenCode 使用量モニター"
 cursor_window_title = "Cursor 使用量モニター"
+session_reset_title = "5時間の使用量がリセットされました"
+session_reset_body = "{model} の5時間の使用量ウィンドウがリセットされました。"
+weekly_reset_title = "7日間の使用量がリセットされました"
+weekly_reset_body = "{model} の7日間の使用量ウィンドウがリセットされました。"
+session_high_usage_title = "5時間の使用量警告"
+session_high_usage_body = "{model} の5時間の使用量が80%を超えました。"
+weekly_high_usage_title = "7日間の使用量警告"
+weekly_high_usage_body = "{model} の7日間の使用量が80%を超えました。"
 
 [translations]
 "Absolute value" = "絶対値"

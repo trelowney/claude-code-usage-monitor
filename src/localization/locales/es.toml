@@ -5,7 +5,7 @@ order = 2
 update_via_winget = "Actualizar con WinGet"
 
 [strings]
-window_title = "Monitor de uso de Claude Code"
+window_title = "Monitor de uso de Claude Code — trelowney"
 refresh = "Actualizar"
 update_frequency = "Frecuencia de actualización"
 one_minute = "1 minuto"
@@ -57,6 +57,14 @@ codex_window_title = "Monitor de uso de Codex"
 antigravity_window_title = "Monitor de uso de Antigravity"
 opencode_window_title = "Monitor de uso de OpenCode"
 cursor_window_title = "Monitor de uso de Cursor"
+session_reset_title = "Uso de 5 horas reiniciado"
+session_reset_body = "Tu ventana de uso de 5 horas de {model} se ha reiniciado."
+weekly_reset_title = "Uso de 7 días reiniciado"
+weekly_reset_body = "Tu ventana de uso de 7 días de {model} se ha reiniciado."
+session_high_usage_title = "Advertencia de uso de 5 horas"
+session_high_usage_body = "Tu uso de 5 horas de {model} ha superado el 80%."
+weekly_high_usage_title = "Advertencia de uso de 7 días"
+weekly_high_usage_body = "Tu uso de 7 días de {model} ha superado el 80%."
 
 [translations]
 "Absolute value" = "Valor absoluto"

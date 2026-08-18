@@ -5,7 +5,7 @@ order = 4
 update_via_winget = "Mit WinGet aktualisieren"
 
 [strings]
-window_title = "Claude Code Nutzungsmonitor"
+window_title = "Claude Code Nutzungsmonitor — trelowney"
 refresh = "Aktualisieren"
 update_frequency = "Aktualisierungsintervall"
 one_minute = "1 Minute"
@@ -57,6 +57,14 @@ codex_window_title = "Codex-Nutzungsmonitor"
 antigravity_window_title = "Antigravity-Nutzungsmonitor"
 opencode_window_title = "OpenCode-Nutzungsmonitor"
 cursor_window_title = "Cursor-Nutzungsmonitor"
+session_reset_title = "5-Stunden-Nutzung zurückgesetzt"
+session_reset_body = "Ihr {model}-5-Stunden-Nutzungsfenster wurde zurückgesetzt."
+weekly_reset_title = "7-Tage-Nutzung zurückgesetzt"
+weekly_reset_body = "Ihr {model}-7-Tage-Nutzungsfenster wurde zurückgesetzt."
+session_high_usage_title = "5-Stunden-Nutzungswarnung"
+session_high_usage_body = "Ihre {model}-5-Stunden-Nutzung hat 80 % überschritten."
+weekly_high_usage_title = "7-Tage-Nutzungswarnung"
+weekly_high_usage_body = "Ihre {model}-7-Tage-Nutzung hat 80 % überschritten."
 
 [translations]
 "Absolute value" = "Absolutwert"

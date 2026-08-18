@@ -7,7 +7,7 @@ windows_font_name = "microsoft-jhenghei"
 windows_font_file = "msjh.ttc"
 
 [strings]
-window_title = "Claude Code 使用量監控"
+window_title = "Claude Code 使用量監控 — trelowney"
 refresh = "重新整理"
 update_frequency = "更新頻率"
 one_minute = "1 分鐘"
@@ -59,6 +59,14 @@ codex_window_title = "Codex 使用量監控"
 antigravity_window_title = "Antigravity 使用量監控"
 opencode_window_title = "OpenCode 使用量監控"
 cursor_window_title = "Cursor 使用量監控"
+session_reset_title = "5 小時用量已重置"
+session_reset_body = "您的 {model} 5 小時用量視窗已重置。"
+weekly_reset_title = "7 天用量已重置"
+weekly_reset_body = "您的 {model} 7 天用量視窗已重置。"
+session_high_usage_title = "5 小時用量警告"
+session_high_usage_body = "您的 {model} 5 小時用量已超過 80%。"
+weekly_high_usage_title = "7 天用量警告"
+weekly_high_usage_body = "您的 {model} 7 天用量已超過 80%。"
 
 [translations]
 "Absolute value" = "絕對值"
