@@ -248,7 +248,12 @@ fn legacy_offset_to_theme_offset(tray_offset: i32, scale: f64) -> i32 {
     } else {
         1.0
     };
-    -((tray_offset.max(0) as f64 / scale).round() as i32)
+    // Our built-in Classic theme is anchored to the taskbar's own LEFT edge
+    // (not the system tray on the right, as upstream's original migration
+    // assumed), so the legacy pixel offset - already "distance from the
+    // taskbar's left edge" in every pre-theme build of this fork - carries
+    // over directly, just DPI-scaled. No sign flip.
+    (tray_offset.max(0) as f64 / scale).round() as i32
 }
 
 fn theme_surface_scale(theme: &ThemeDocument, surface_index: usize) -> f64 {

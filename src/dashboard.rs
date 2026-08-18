@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_RESTORE, WM_CLOSE,
 };
 
-const DASHBOARD_TITLE: &str = "Usage Monitor";
+const DASHBOARD_TITLE: &str = "Usage Monitor — trelowney";
 const DASHBOARD_MUTEX: &str = "Local\\ClaudeCodeUsageMonitorDashboard";
 const DASHBOARD_REQUEST_EVENT: &str = "Local\\ClaudeCodeUsageMonitorOpenDashboard";
 

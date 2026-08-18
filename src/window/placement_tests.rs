@@ -34,11 +34,14 @@ fn physical_host_dimensions_are_normalized_to_logical_pixels() {
 }
 
 #[test]
-fn legacy_physical_offset_becomes_a_leftward_logical_theme_offset() {
-    assert_eq!(legacy_offset_to_theme_offset(120, 1.25), -96);
-    assert_eq!(legacy_offset_to_theme_offset(120, 1.0), -120);
+fn legacy_physical_offset_becomes_a_left_anchored_logical_theme_offset() {
+    // Our built-in Classic theme anchors to the taskbar's left edge, so the
+    // legacy "distance from the left edge" pixel value carries over
+    // directly (DPI-scaled), unlike upstream's tray-anchored migration.
+    assert_eq!(legacy_offset_to_theme_offset(120, 1.25), 96);
+    assert_eq!(legacy_offset_to_theme_offset(120, 1.0), 120);
     assert_eq!(legacy_offset_to_theme_offset(-5, 1.0), 0);
-    assert_eq!(legacy_offset_to_theme_offset(20, 0.0), -20);
+    assert_eq!(legacy_offset_to_theme_offset(20, 0.0), 20);
 }
 
 #[test]
