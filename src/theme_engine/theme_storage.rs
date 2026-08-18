@@ -368,7 +368,12 @@ pub(super) fn ensure_bundled_editable_themes(
 
         let path = directory.join(format!("{expected_id}.json"));
         if !path.exists() {
-            crate::app_settings::write_json_atomic(&path, &bundled)?;
+            // Only recreate it on first install. A missing file after that
+            // means the user deleted it on purpose (e.g. via Theme Studio) -
+            // it should stay deleted, not come back on the next launch.
+            if first_install {
+                crate::app_settings::write_json_atomic(&path, &bundled)?;
+            }
             continue;
         }
 
