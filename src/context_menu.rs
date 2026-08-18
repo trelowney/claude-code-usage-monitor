@@ -435,7 +435,6 @@ pub fn classic_context_menu() -> ContextMenuDocument {
             frequency,
             providers,
             settings,
-            ContextMenuItem::action("toggle-widget", "Show widget", Action::ToggleWidget),
             ContextMenuItem::action("open-dashboard", "Open Dashboard", Action::OpenDashboard),
             ContextMenuItem::separator("root-separator"),
             ContextMenuItem::action("exit", "Exit", Action::Exit),
@@ -683,15 +682,10 @@ mod tests {
         assert!(serde_json::to_string(&menu)
             .unwrap()
             .contains("provider-cursor"));
-        assert!(menu.items.iter().any(|item| {
-            item.id == "toggle-widget"
-                && matches!(
-                    &item.kind,
-                    ContextMenuItemKind::Action {
-                        action: ContextMenuAction::ToggleWidget
-                    }
-                )
-        }));
+        // "Show widget" is deliberately not in this fork's menu: hiding the
+        // Classic surface with no tray icon to fall back on would leave no
+        // way to right-click it again to turn it back on.
+        assert!(!menu.items.iter().any(|item| item.id == "toggle-widget"));
         assert!(!serde_json::to_string(&menu)
             .unwrap()
             .contains("reset_position"));

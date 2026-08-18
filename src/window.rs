@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
@@ -15,7 +15,7 @@ use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, ReleaseCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -108,9 +108,12 @@ struct AppState {
 
     taskbar_index: usize,
     tray_offset: i32,
+    /// True from the first WM_LBUTTONDOWN on the widget until either enough
+    /// movement turns it into a real drag, or WM_LBUTTONUP resolves it as a
+    /// click instead.
+    drag_candidate: bool,
     dragging: bool,
     drag_start_mouse_x: i32,
-    drag_start_client_x: i32,
     drag_start_offset: i32,
 
     custom_theme_enabled: bool,
@@ -154,7 +157,6 @@ const IDM_DASHBOARD: u16 = 71;
 
 const WM_DPICHANGED_MSG: u32 = 0x02E0;
 const WM_APP_UPDATE_CHECK_COMPLETE: u32 = WM_APP + 2;
-const TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS: u64 = 750;
 
 fn language_menu_command_id(language: LanguageId) -> u16 {
     IDM_LANG_FIRST
@@ -171,8 +173,6 @@ fn language_from_menu_command_id(command: u16) -> Option<LanguageId> {
 /// How often the watchdog thread polls for an explorer.exe restart (which
 /// recreates the taskbar and wipes our tray-icon registration).
 const TASKBAR_WATCH_INTERVAL_SECS: u64 = 2;
-
-static SUPPRESS_TRAY_REPOSITION_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Current system DPI (96 = 100% scaling, 144 = 150%, 192 = 200%, etc.)
 static CURRENT_DPI: AtomicU32 = AtomicU32::new(96);
@@ -566,101 +566,87 @@ fn taskbar_created_message() -> u32 {
     })
 }
 
-fn attach_to_taskbar(hwnd: HWND, requested_index: usize) -> bool {
-    let taskbars = native_interop::find_taskbars();
-    if taskbars.is_empty() {
-        diagnose::log("taskbar not found; using fallback popup window");
-        return false;
-    }
-
-    let index = requested_index.min(taskbars.len().saturating_sub(1));
-    let taskbar = taskbars[index];
-    diagnose::log(format!(
-        "taskbar selected index={index} count={} hwnd={:?} rect=({}, {}, {}, {})",
-        taskbars.len(),
-        taskbar.hwnd,
-        taskbar.rect.left,
-        taskbar.rect.top,
-        taskbar.rect.right,
-        taskbar.rect.bottom
-    ));
-
-    let old_hook = {
-        let mut state = lock_state();
-        state.as_mut().and_then(|s| s.win_event_hook.take())
-    };
-    if let Some(hook) = old_hook {
-        native_interop::unhook_win_event(hook.to_hook());
-    }
-
-    native_interop::embed_in_taskbar(hwnd, taskbar.hwnd);
-
-    let tray_notify = native_interop::find_child_window(taskbar.hwnd, "TrayNotifyWnd");
-    if tray_notify.is_some() {
-        diagnose::log("TrayNotifyWnd found");
-    } else {
-        diagnose::log("TrayNotifyWnd not found");
-    }
-
-    let hook = tray_notify.and_then(|tray_hwnd| {
-        let thread_id = native_interop::get_window_thread_id(tray_hwnd);
-        native_interop::set_tray_event_hook(thread_id, on_tray_location_changed)
-    });
-    if hook.is_some() {
-        diagnose::log("tray event hook installed");
-    } else {
-        diagnose::log("tray event hook could not be installed");
-    }
-
-    let mut state = lock_state();
-    if let Some(s) = state.as_mut() {
-        s.taskbar_hwnd = Some(SendHwnd::from_hwnd(taskbar.hwnd));
-        s.tray_notify_hwnd = tray_notify.map(SendHwnd::from_hwnd);
-        s.win_event_hook = hook.map(SendWinEventHook::from_hook);
-        s.taskbar_index = index;
-        s.embedded = true;
-    }
-    true
-}
-
-fn taskbar_at_point(pt: POINT) -> Option<(usize, native_interop::TaskbarWindow)> {
-    native_interop::find_taskbars()
-        .into_iter()
-        .enumerate()
-        .find(|(_, taskbar)| {
-            pt.x >= taskbar.rect.left
-                && pt.x < taskbar.rect.right
-                && pt.y >= taskbar.rect.top
-                && pt.y < taskbar.rect.bottom
+/// Current X offset of the widget's own surface in the active theme, or 0 if
+/// there's no active theme yet.
+fn current_widget_offset_x(state: &AppState) -> i32 {
+    state
+        .active_theme
+        .as_ref()
+        .and_then(|theme| {
+            context_menu_widget_origin(theme)
+                .and_then(|(index, _)| theme.surfaces.get(index))
+                .map(|surface| surface.placement.offset_x)
         })
+        .unwrap_or(0)
 }
 
-fn tray_left_for_taskbar(taskbar_hwnd: HWND, taskbar_rect: RECT) -> i32 {
-    let mut tray_left = taskbar_rect.right;
-    if let Some(tray_hwnd) = native_interop::find_child_window(taskbar_hwnd, "TrayNotifyWnd") {
+/// Tray-avoiding upper bound for a live drag, so dragging can't put the
+/// widget on top of the tray icons.
+fn max_drag_offset_x() -> i32 {
+    let Some(taskbar) = native_interop::find_taskbars().into_iter().next() else {
+        return i32::MAX;
+    };
+    let mut tray_left = taskbar.rect.right;
+    if let Some(tray_hwnd) = native_interop::find_child_window(taskbar.hwnd, "TrayNotifyWnd") {
         if let Some(tray_rect) = native_interop::get_window_rect_safe(tray_hwnd) {
             tray_left = tray_rect.left;
         }
     }
-    tray_left
+    (tray_left - taskbar.rect.left - total_widget_width()).max(0)
 }
 
-fn clamp_offset_for_taskbar(taskbar_hwnd: HWND, taskbar_rect: RECT, offset: i32) -> i32 {
-    let tray_left = tray_left_for_taskbar(taskbar_hwnd, taskbar_rect);
-    let max_offset = (tray_left - taskbar_rect.left - total_widget_width()).max(0);
-    offset.clamp(0, max_offset)
+/// Live-update the widget's position in memory during a drag, without
+/// touching disk - `finalize_drag_persist` saves it once the drag ends.
+fn apply_live_drag_offset(new_offset_x: i32) {
+    {
+        let mut state = lock_state();
+        if let Some(s) = state.as_mut() {
+            if let Some(theme) = s.active_theme.as_mut() {
+                if let Some((surface_index, _)) = context_menu_widget_origin(theme) {
+                    if let Some(surface) = theme.surfaces.get_mut(surface_index) {
+                        surface.placement.offset_x = new_offset_x;
+                        surface.placement.offset_x_expression = None;
+                    }
+                }
+            }
+        }
+    }
+    render_layered();
 }
 
-fn offset_for_drop_point(
-    taskbar_hwnd: HWND,
-    taskbar_rect: RECT,
-    pt: POINT,
-    drag_start_client_x: i32,
-) -> i32 {
-    // Widget is anchored to the taskbar's left edge; offset is the desired
-    // distance of its left edge from that anchor.
-    let desired_left = pt.x - taskbar_rect.left - drag_start_client_x;
-    clamp_offset_for_taskbar(taskbar_hwnd, taskbar_rect, desired_left)
+/// Persist the position a drag ended at. Built-in themes (Classic) can't be
+/// saved over directly - `theme_engine::save_theme` refuses that on purpose,
+/// so the first drag on a built-in theme forks it into a personal, editable
+/// copy under a new id/name; later drags on that copy just resave it.
+fn finalize_drag_persist() {
+    let theme_to_save = {
+        let mut state = lock_state();
+        let Some(s) = state.as_mut() else {
+            return;
+        };
+        let Some(theme) = s.active_theme.as_mut() else {
+            return;
+        };
+        if theme.is_builtin() {
+            theme.id = format!("{}-custom-{}", theme.id, now_unix_secs());
+            theme.name = format!("{} (custom position)", theme.name);
+        }
+        theme.clone()
+    };
+    match theme_engine::save_theme(&theme_to_save) {
+        Ok(path) => {
+            let mut state = lock_state();
+            if let Some(s) = state.as_mut() {
+                s.active_theme = Some(theme_to_save);
+                s.active_theme_path = Some(path);
+            }
+            drop(state);
+            save_state_settings();
+        }
+        Err(error) => {
+            diagnose::log(format!("unable to persist dragged widget position: {error}"));
+        }
+    }
 }
 
 fn now_unix_secs() -> u64 {
@@ -1626,9 +1612,9 @@ pub fn run() {
                 last_update_check_unix: settings.last_update_check_unix,
                 taskbar_index: settings.taskbar_index,
                 tray_offset: settings.tray_offset,
+                drag_candidate: false,
                 dragging: false,
                 drag_start_mouse_x: 0,
-                drag_start_client_x: 0,
                 drag_start_offset: 0,
                 custom_theme_enabled,
                 active_theme_path,
@@ -2187,29 +2173,6 @@ fn reload_external_settings(hwnd: HWND) {
     sync_tray_icon(hwnd);
     position_at_taskbar();
     render_layered();
-}
-
-fn suppress_tray_reposition_for(duration: Duration) {
-    let mut until = SUPPRESS_TRAY_REPOSITION_UNTIL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *until = Some(Instant::now() + duration);
-}
-
-fn tray_reposition_is_suppressed() -> bool {
-    let now = Instant::now();
-    let mut until = SUPPRESS_TRAY_REPOSITION_UNTIL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    match *until {
-        Some(deadline) if now < deadline => true,
-        Some(_) => {
-            *until = None;
-            false
-        }
-        None => false,
-    }
 }
 
 mod message_loop;

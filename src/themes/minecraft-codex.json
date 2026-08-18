@@ -10,15 +10,15 @@
       "visibility": "100",
       "placement": {
         "reference": {
-          "region": "system_tray",
+          "region": "taskbar",
           "display": 0
         },
         "nest": "taskbar",
         "horizontal": "left",
         "vertical": "bottom",
-        "surface_horizontal": "right",
+        "surface_horizontal": "left",
         "surface_vertical": "bottom",
-        "offset_x": -4,
+        "offset_x": 110,
         "offset_y": 0
       },
       "width": "162",
