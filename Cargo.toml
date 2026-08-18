@@ -3,7 +3,7 @@ name = "claude-usage-monitor-trelowney"
 version = "2.2.7-trelowney.1"
 edition = "2021"
 license = "MIT"
-description = "Claude Code Usage Monitor - trelowney's private build"
+description = "Claude Code Usage Monitor - trelowney's personal build"
 repository = "https://github.com/trelowney/claude-code-usage-monitor"
 
 [package.metadata.winres]
