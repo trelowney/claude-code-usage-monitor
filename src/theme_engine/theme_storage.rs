@@ -335,14 +335,14 @@ pub(super) fn ensure_bundled_editable_themes(
     asset_directory: &Path,
 ) -> Result<(), String> {
     let install_marker = directory.join(BUNDLED_EDITABLE_INSTALL_MARKER);
-    if install_marker.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(asset_directory).map_err(|error| error.to_string())?;
-    for (file_name, source) in BUNDLED_THEME_ASSETS {
-        let path = asset_directory.join(file_name);
-        if !path.exists() {
-            std::fs::write(path, source).map_err(|error| error.to_string())?;
+    let first_install = !install_marker.exists();
+    if first_install {
+        std::fs::create_dir_all(asset_directory).map_err(|error| error.to_string())?;
+        for (file_name, source) in BUNDLED_THEME_ASSETS {
+            let path = asset_directory.join(file_name);
+            if !path.exists() {
+                std::fs::write(path, source).map_err(|error| error.to_string())?;
+            }
         }
     }
 
@@ -372,18 +372,49 @@ pub(super) fn ensure_bundled_editable_themes(
             continue;
         }
 
-        // Upgrade the original locally-created Minecraft theme without
-        // replacing any other user edits. Once changed, later menu choices are
-        // preserved because only the old prototype reference is recognized.
+        // Upgrade an already-installed copy without replacing any other user
+        // edits: each migration only touches fields it recognizes as still
+        // matching the old prototype/default, never a value the user has
+        // since changed themselves (via drag or Theme Studio).
         let Ok(mut installed) = load_theme(&path) else {
             continue;
         };
-        if migrate_minecraft_context_menu(&mut installed) {
+        let context_menu_changed = migrate_minecraft_context_menu(&mut installed);
+        let placement_changed = migrate_legacy_tray_anchored_placement(&mut installed, &bundled);
+        if context_menu_changed || placement_changed {
             crate::app_settings::write_json_atomic(&path, &installed)?;
         }
     }
-    std::fs::write(install_marker, b"1").map_err(|error| error.to_string())?;
+    if first_install {
+        std::fs::write(install_marker, b"1").map_err(|error| error.to_string())?;
+    }
     Ok(())
+}
+
+/// Fork's own migration: this fork docks the taskbar widget to the left
+/// edge, but upstream's bundled themes (including Minecraft) still ship
+/// anchored to the system tray on the right. A copy already installed on
+/// disk from before this fix keeps its own placement forever (that's the
+/// whole point of "bundled editable" themes) - unless it still exactly
+/// matches upstream's original tray-anchored default, in which case it was
+/// never actually customized and this brings it in line with our default.
+fn migrate_legacy_tray_anchored_placement(
+    installed: &mut ThemeDocument,
+    bundled: &ThemeDocument,
+) -> bool {
+    let mut changed = false;
+    for (installed_surface, bundled_surface) in
+        installed.surfaces.iter_mut().zip(bundled.surfaces.iter())
+    {
+        let placement = &installed_surface.placement;
+        let is_untouched_legacy_default = placement.reference.region == ReferenceRegion::SystemTray
+            && placement.surface_horizontal == Some(HorizontalAnchor::Right);
+        if is_untouched_legacy_default {
+            installed_surface.placement = bundled_surface.placement.clone();
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub(super) fn migrate_minecraft_context_menu(theme: &mut ThemeDocument) -> bool {
