@@ -1,0 +1,22 @@
+name: CI (upstream-merge WIP)
+
+on:
+  push:
+    branches:
+      - upstream-merge
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (debug, for faster iteration)
+        run: cargo build
+
+      - name: Run tests
+        run: cargo test
