@@ -158,8 +158,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         None => return LRESULT(0),
                     };
 
-                    // Moving mouse left = positive delta = larger offset (further left)
-                    let delta = s.drag_start_mouse_x - pt.x;
+                    // Widget is anchored to the taskbar's left edge, so moving the
+                    // mouse right increases the offset (moves the widget right).
+                    let delta = pt.x - s.drag_start_mouse_x;
                     let mut new_offset = s.drag_start_offset + delta;
 
                     // Clamp: offset >= 0 (can't go right of default)
@@ -198,9 +199,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                             let widget_height = total_widget_height_for_state(s);
                             let y = compute_anchor_y(anchor_top, anchor_height, widget_height);
                             let x = if embedded {
-                                tray_left - taskbar_rect.left - widget_width - new_offset
+                                new_offset
                             } else {
-                                tray_left - widget_width - new_offset
+                                taskbar_rect.left + new_offset
                             };
                             Some((
                                 hwnd_val,

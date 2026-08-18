@@ -16,6 +16,7 @@ mod theme;
 mod theme_engine;
 mod theme_package;
 mod toast;
+mod tray_icon;
 mod ui;
 mod updater;
 mod window;

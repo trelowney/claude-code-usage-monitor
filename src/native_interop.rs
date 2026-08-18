@@ -30,6 +30,7 @@ pub const TIMER_TRAY_HOVER: usize = 7;
 // Custom messages
 pub const WM_APP: u32 = 0x8000;
 pub const WM_APP_USAGE_UPDATED: u32 = WM_APP + 1;
+pub const WM_APP_TRAY: u32 = WM_APP + 3;
 pub const WM_APP_SETTINGS_UPDATED: u32 = WM_APP + 5;
 pub const WM_APP_REFRESH_NOW: u32 = WM_APP + 6;
 pub const WM_APP_QUIT: u32 = WM_APP + 7;

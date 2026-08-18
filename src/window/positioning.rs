@@ -90,9 +90,13 @@ pub(super) fn position_at_taskbar() {
 
     let widget_height = total_widget_height();
     let y = compute_anchor_y(anchor_top, anchor_height, widget_height);
+    // The widget is anchored to the taskbar's LEFT edge (not the system tray on
+    // the right) so it doesn't sit on top of pinned/running app icons. `tray_left`
+    // above is still used for `max_offset`, clamping the widget so a drag can't
+    // push it into the system tray.
     if embedded {
         // Child window: coordinates relative to parent (taskbar)
-        let x = tray_left - taskbar_rect.left - widget_width - tray_offset;
+        let x = tray_offset;
         native_interop::move_window(hwnd, x, y - taskbar_rect.top, widget_width, widget_height);
         diagnose::log(format!(
             "positioned embedded widget at x={x} y={} w={widget_width} h={widget_height}",
@@ -100,7 +104,7 @@ pub(super) fn position_at_taskbar() {
         ));
     } else {
         // Topmost popup: screen coordinates
-        let x = tray_left - widget_width - tray_offset;
+        let x = taskbar_rect.left + tray_offset;
         native_interop::move_window(hwnd, x, y, widget_width, widget_height);
         diagnose::log(format!(
             "positioned fallback widget at x={x} y={y} w={widget_width} h={widget_height}"

@@ -28,7 +28,7 @@ use crate::app_settings::{
 use crate::context_menu::{self, ContextMenuAction, ContextMenuItem, ContextMenuItemKind};
 use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
-use crate::models::AppUsageData;
+use crate::models::{AppUsageData, UsageSection};
 use crate::native_interop::{
     self, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL, TIMER_TRAY_HOVER,
     TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
@@ -470,14 +470,6 @@ fn save_settings_or_log(settings: &SettingsFile, context: &str) {
     }
 }
 
-fn tray_icon_tooltip_from_state() -> String {
-    let state = lock_state();
-    match state.as_ref() {
-        Some(state) => state.language.strings().window_title.to_string(),
-        None => "Claude Code Usage Monitor".to_string(),
-    }
-}
-
 fn sync_tray_icon(hwnd: HWND) {
     let themed = {
         let state = lock_state();
@@ -556,7 +548,9 @@ fn sync_tray_icon(hwnd: HWND) {
             return;
         }
     }
-    tray_icon::sync(hwnd, &tray_icon_tooltip_from_state());
+    // Unlike upstream, the active theme showing no tray-nested surface means no
+    // tray icon at all — no unconditional fallback app icon + tooltip.
+    tray_icon::remove_all(hwnd);
 }
 
 fn taskbar_created_message() -> u32 {
@@ -658,10 +652,10 @@ fn offset_for_drop_point(
     pt: POINT,
     drag_start_client_x: i32,
 ) -> i32 {
-    let tray_left = tray_left_for_taskbar(taskbar_hwnd, taskbar_rect);
+    // Widget is anchored to the taskbar's left edge; offset is the desired
+    // distance of its left edge from that anchor.
     let desired_left = pt.x - taskbar_rect.left - drag_start_client_x;
-    let offset = tray_left - taskbar_rect.left - total_widget_width() - desired_left;
-    clamp_offset_for_taskbar(taskbar_hwnd, taskbar_rect, offset)
+    clamp_offset_for_taskbar(taskbar_hwnd, taskbar_rect, desired_left)
 }
 
 fn now_unix_secs() -> u64 {
@@ -1882,6 +1876,72 @@ fn poll_worker(send_hwnd: SendHwnd) {
     }
 }
 
+const RESET_NOTIFY_THRESHOLD: f64 = 50.0;
+const RESET_LOW_WATERMARK: f64 = 20.0;
+const HIGH_USAGE_NOTIFY_THRESHOLD: f64 = 80.0;
+
+/// Reset/high-usage toasts are scoped to providers with a fixed 5-hour session
+/// window and a fixed 7-day weekly window. Cursor's session/weekly fields hold
+/// Auto/API percentages (no time window at all), and OpenCode's weekly window
+/// can dynamically relabel itself to 30 days, so "5-Hour"/"7-Day" wording would
+/// be inaccurate for either — this notification feature intentionally doesn't
+/// extend to them.
+const RESET_NOTIFICATION_PROVIDERS: [ProviderId; 3] =
+    [ProviderId::Claude, ProviderId::Codex, ProviderId::Antigravity];
+
+fn window_just_reset(previous: &UsageSection, current: &UsageSection) -> bool {
+    previous.percentage > RESET_NOTIFY_THRESHOLD && current.percentage < RESET_LOW_WATERMARK
+}
+
+fn window_just_crossed_high_usage(previous: &UsageSection, current: &UsageSection) -> bool {
+    previous.percentage < HIGH_USAGE_NOTIFY_THRESHOLD
+        && current.percentage >= HIGH_USAGE_NOTIFY_THRESHOLD
+}
+
+fn collect_usage_notifications(
+    out: &mut Vec<(String, String)>,
+    language: LanguageId,
+    previous: Option<&AppUsageData>,
+    current: &AppUsageData,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let strings = language.strings();
+    for provider in RESET_NOTIFICATION_PROVIDERS {
+        let (Some(previous_usage), Some(current_usage)) =
+            (previous.get(provider), current.get(provider))
+        else {
+            continue;
+        };
+        let model_name = language.text(provider.descriptor().display_name);
+        if window_just_reset(&previous_usage.session, &current_usage.session) {
+            out.push((
+                strings.session_reset_title.to_string(),
+                strings.session_reset_body.replace("{model}", model_name),
+            ));
+        }
+        if window_just_reset(&previous_usage.weekly, &current_usage.weekly) {
+            out.push((
+                strings.weekly_reset_title.to_string(),
+                strings.weekly_reset_body.replace("{model}", model_name),
+            ));
+        }
+        if window_just_crossed_high_usage(&previous_usage.session, &current_usage.session) {
+            out.push((
+                strings.session_high_usage_title.to_string(),
+                strings.session_high_usage_body.replace("{model}", model_name),
+            ));
+        }
+        if window_just_crossed_high_usage(&previous_usage.weekly, &current_usage.weekly) {
+            out.push((
+                strings.weekly_high_usage_title.to_string(),
+                strings.weekly_high_usage_body.replace("{model}", model_name),
+            ));
+        }
+    }
+}
+
 fn do_poll_once(hwnd: HWND) {
     let enabled_providers = {
         let state = lock_state();
@@ -1894,6 +1954,7 @@ fn do_poll_once(hwnd: HWND) {
     match poller::poll(enabled_providers) {
         Ok(data) => {
             let cache_data = data.clone();
+            let mut reset_notifications: Vec<(String, String)> = Vec::new();
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
                 // Stop fast-poll if reset data is now fresh
@@ -1902,6 +1963,13 @@ fn do_poll_once(hwnd: HWND) {
                         let _ = KillTimer(hwnd, TIMER_RESET_POLL);
                     }
                 }
+
+                collect_usage_notifications(
+                    &mut reset_notifications,
+                    s.language,
+                    s.data.as_ref(),
+                    &data,
+                );
 
                 s.data = Some(data);
                 s.last_poll_ok = true;
@@ -1923,6 +1991,9 @@ fn do_poll_once(hwnd: HWND) {
             }
             drop(state);
             let _ = app_settings::save_usage_cache(&cache_data, true);
+            for (title, body) in &reset_notifications {
+                crate::toast::notify(title, body);
+            }
 
             unsafe {
                 let _ = PostMessageW(hwnd, WM_APP_USAGE_UPDATED, WPARAM(0), LPARAM(0));
@@ -2003,7 +2074,7 @@ fn do_poll_once(hwnd: HWND) {
                         .map(|state| state.language.provider_auth_error(failure.provider))
                 };
                 if let Some((title, body)) = balloon {
-                    tray_icon::notify_balloon(hwnd, title, body);
+                    crate::toast::notify(title, body);
                 }
             }
 
