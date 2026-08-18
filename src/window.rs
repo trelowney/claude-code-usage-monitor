@@ -11,7 +11,6 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
-use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -62,30 +61,10 @@ impl SendHwnd {
     }
 }
 
-/// Copyable event-hook value whose lifetime remains owned by the UI controller.
-#[derive(Clone, Copy)]
-struct SendWinEventHook(isize);
-
-// SAFETY: the hook is only stored or passed to UnhookWinEvent. Callback work is
-// marshalled through Win32; Rust data is never dereferenced through this value.
-unsafe impl Send for SendWinEventHook {}
-
-impl SendWinEventHook {
-    fn from_hook(hook: HWINEVENTHOOK) -> Self {
-        Self(hook.0 as isize)
-    }
-
-    fn to_hook(self) -> HWINEVENTHOOK {
-        HWINEVENTHOOK(self.0 as *mut _)
-    }
-}
-
 /// Shared application state
 struct AppState {
     hwnd: SendHwnd,
     taskbar_hwnd: Option<SendHwnd>,
-    tray_notify_hwnd: Option<SendHwnd>,
-    win_event_hook: Option<SendWinEventHook>,
     is_dark: bool,
     embedded: bool,
     language_override: Option<LanguageId>,
@@ -1055,7 +1034,7 @@ fn apply_custom_theme(
             .and_then(|state| state.active_theme.clone()),
     };
     let loaded = loaded.unwrap_or_else(ThemeDocument::starter);
-    let old_hook = {
+    {
         let mut state = lock_state();
         let Some(state) = state.as_mut() else {
             return Err("Application is not ready".into());
@@ -1070,10 +1049,6 @@ fn apply_custom_theme(
             state.active_theme_path = path;
         }
         state.embedded = false;
-        state.win_event_hook.take()
-    };
-    if let Some(hook) = old_hook {
-        native_interop::unhook_win_event(hook.to_hook());
     }
     unsafe {
         native_interop::make_popup(hwnd, false);
@@ -1590,8 +1565,6 @@ pub fn run() {
             *state = Some(AppState {
                 hwnd: SendHwnd::from_hwnd(hwnd),
                 taskbar_hwnd: None,
-                tray_notify_hwnd: None,
-                win_event_hook: None,
                 is_dark,
                 embedded: false,
                 language_override,

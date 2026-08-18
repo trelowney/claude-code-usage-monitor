@@ -295,13 +295,6 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     }
                 }
                 2 => {
-                    let hook = {
-                        let state = lock_state();
-                        state.as_ref().and_then(|s| s.win_event_hook)
-                    };
-                    if let Some(h) = hook {
-                        native_interop::unhook_win_event(h.to_hook());
-                    }
                     crate::dashboard::close_existing();
                     let _ = DestroyWindow(hwnd);
                 }
@@ -447,19 +440,13 @@ pub(super) unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             crate::dashboard::close_existing();
             crate::desktop_compositor::clear();
-            let (hook, desktop_windows) = {
+            let desktop_windows = {
                 let mut state = lock_state();
                 match state.as_mut() {
-                    Some(state) => (
-                        state.win_event_hook,
-                        std::mem::take(&mut state.desktop_hwnds),
-                    ),
-                    None => (None, Vec::new()),
+                    Some(state) => std::mem::take(&mut state.desktop_hwnds),
+                    None => Vec::new(),
                 }
             };
-            if let Some(h) = hook {
-                native_interop::unhook_win_event(h.to_hook());
-            }
             for window in desktop_windows.into_iter().flatten() {
                 let _ = DestroyWindow(window.to_hwnd());
             }

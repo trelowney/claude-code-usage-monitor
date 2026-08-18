@@ -421,6 +421,7 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 "Check for updates",
                 Action::CheckForUpdates,
             ),
+            ContextMenuItem::text("version", "v{app.version}"),
         ],
     );
 
@@ -682,6 +683,9 @@ mod tests {
         assert!(serde_json::to_string(&menu)
             .unwrap()
             .contains("provider-cursor"));
+        assert!(serde_json::to_string(&menu)
+            .unwrap()
+            .contains("v{app.version}"));
         // "Show widget" is deliberately not in this fork's menu: hiding the
         // Classic surface with no tray icon to fall back on would leave no
         // way to right-click it again to turn it back on.

@@ -5,7 +5,6 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
-use windows::Win32::UI::Accessibility::{UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -357,13 +356,6 @@ pub fn find_desktop_host() -> Option<DesktopHost> {
 pub fn move_window(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     unsafe {
         let _ = MoveWindow(hwnd, x, y, w, h, true);
-    }
-}
-
-/// Unhook a WinEvent hook
-pub fn unhook_win_event(hook: HWINEVENTHOOK) {
-    unsafe {
-        let _ = UnhookWinEvent(hook);
     }
 }
 

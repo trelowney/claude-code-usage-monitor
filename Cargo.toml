@@ -1,6 +1,6 @@
 [package]
 name = "claude-usage-monitor-trelowney"
-version = "2.2.7-trelowney.2"
+version = "2.2.7-trelowney.1"
 edition = "2021"
 license = "MIT"
 description = "Claude Code Usage Monitor - trelowney's personal build"
