@@ -3104,22 +3104,9 @@ fn draw_row(
     let seg_h = sc(SEGMENT_H);
     let active_models = active_model_count(show_claude_code, show_codex, show_antigravity);
     let segment_count = row_bar_segment_count(active_models);
-    let use_model_text_colors = active_models > 1;
-    let claude_value_color = if use_model_text_colors {
-        claude_usage_text_color(is_dark)
-    } else {
-        *text_color
-    };
-    let codex_value_color = if use_model_text_colors {
-        codex_usage_text_color(is_dark)
-    } else {
-        *text_color
-    };
-    let antigravity_value_color = if use_model_text_colors {
-        antigravity_usage_text_color(is_dark)
-    } else {
-        *text_color
-    };
+    let claude_value_color = claude_usage_text_color(is_dark);
+    let codex_value_color = codex_usage_text_color(is_dark);
+    let antigravity_value_color = antigravity_usage_text_color(is_dark);
 
     unsafe {
         let _ = SetTextColor(hdc, COLORREF(text_color.to_colorref()));
