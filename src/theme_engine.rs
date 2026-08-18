@@ -1290,6 +1290,7 @@ impl DataContext {
             (!runtime.poll_ok && !runtime.has_error) as u8 as f64,
         );
         let strings = runtime.language.strings();
+        context.insert_string("i18n.window_title", strings.window_title);
         context.insert_string("i18n.session_window", strings.session_window);
         context.insert_string("i18n.weekly_window", strings.weekly_window);
         context.insert_string("i18n.cursor_auto_window", strings.cursor_auto_window);

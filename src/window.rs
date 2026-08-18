@@ -1390,6 +1390,7 @@ pub fn run() {
         CURRENT_DPI.store(GetDpiForSystem(), Ordering::Relaxed);
     }
     diagnose::log("window::run started");
+    crate::toast::init();
 
     // Single-instance guard: silently exit if another instance is running.
     // Exception: when relaunched after an explorer restart (ENV_RELAUNCH set),

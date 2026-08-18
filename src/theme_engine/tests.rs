@@ -364,8 +364,10 @@ fn starter_theme_round_trips_and_validates() {
         })
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
-    // 1.4.9 palette follows the taskbar mode without runtime recolouring.
-    assert_eq!(segments, vec![10; 20]);
+    // 1.4.9 palette follows the taskbar mode without runtime recolouring,
+    // and separate normal/high-usage (>=80%) variants of each of those so
+    // segments turn red without any runtime recolouring either.
+    assert_eq!(segments, vec![10; 40]);
     assert!(theme.surfaces[0]
         .children
         .iter()
@@ -932,28 +934,23 @@ fn each_surface_renders_at_its_own_size() {
 }
 
 #[test]
-fn starter_has_a_taskbar_widget_and_provider_tray_icons() {
+fn starter_has_a_left_docked_taskbar_widget_and_no_tray_icons() {
     let theme = ThemeDocument::starter();
     assert!(theme.is_builtin_classic());
     assert_eq!(theme.surfaces[0].placement.nest, SurfaceNest::Taskbar);
+    // Anchored to the taskbar's own left edge, not the system tray, so it
+    // never overlaps pinned/running app icons. No provider tray-icon
+    // surfaces are declared at all - the widget itself already shows the
+    // same numbers, so there's nothing to duplicate near the clock.
     assert_eq!(
         theme.surfaces[0].placement.reference.region,
-        ReferenceRegion::SystemTray
+        ReferenceRegion::Taskbar
     );
-    assert_eq!(theme.surfaces.len(), 6);
-    assert!(theme.surfaces[1..]
-        .iter()
-        .all(|surface| surface.placement.nest == SurfaceNest::TrayIcon));
+    assert_eq!(theme.surfaces.len(), 1);
     assert_eq!(
         theme.surfaces[0].mouse_events.as_ref().unwrap().right_click,
         "show_context_menu(\"classic-v1\")"
     );
-    assert!(theme.surfaces[1..].iter().all(|surface| {
-        let events = surface.mouse_events.as_ref().unwrap();
-        events.click == "toggle(\"main\", render)"
-            && events.double_click == events.click
-            && events.right_click == "show_context_menu(\"classic-v1\")"
-    }));
 }
 
 #[test]
@@ -978,18 +975,6 @@ fn hidden_legacy_widget_creates_an_unplaced_hidden_copy() {
     assert_eq!(theme.surfaces[0].render.0, "0");
     assert_eq!(theme.surfaces[0].placement, classic.surfaces[0].placement);
     assert!(theme.validate().is_empty());
-}
-
-#[test]
-fn starter_tray_icons_follow_enabled_providers() {
-    let theme = ThemeDocument::starter();
-    let runtime = ThemeRuntime::new(false, true, false);
-    assert!(!surface_should_render(&theme, 1, None, runtime));
-    assert!(surface_should_render(&theme, 2, None, runtime));
-    assert!(!surface_should_render(&theme, 3, None, runtime));
-    let rendered = render_theme_surface_with_runtime(&theme, 2, None, runtime);
-    assert_eq!((rendered.width, rendered.height), (64, 64));
-    assert!(rendered.pixels.iter().any(|pixel| pixel >> 24 > 0));
 }
 
 #[test]
@@ -1287,42 +1272,6 @@ fn action_overrides_are_runtime_only_and_reset_restores_saved_expression() {
     )
     .unwrap();
     assert!(overrides.is_empty());
-}
-
-#[test]
-fn tray_root_can_toggle_the_main_root_on_another_surface() {
-    let theme = ThemeDocument::starter();
-    let tray_id = theme.surfaces[1].id.clone();
-    let click = theme.surfaces[1]
-        .mouse_events
-        .as_ref()
-        .unwrap()
-        .click
-        .clone();
-    let mut overrides = HashMap::new();
-    execute_mouse_actions(
-        &theme,
-        1,
-        &tray_id,
-        &click,
-        None,
-        ThemeRuntime::default(),
-        &mut overrides,
-    )
-    .unwrap();
-
-    let key = MouseActionOverrideKey {
-        surface_index: 0,
-        object_id: "main".into(),
-        property: MouseActionProperty::Render,
-    };
-    assert_eq!(overrides.get(&key).map(|value| value.0.as_str()), Some("0"));
-    assert!(!surface_should_render(
-        &apply_mouse_action_overrides(&theme, &overrides),
-        0,
-        None,
-        ThemeRuntime::default()
-    ));
 }
 
 #[test]

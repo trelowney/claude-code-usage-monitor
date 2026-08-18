@@ -429,6 +429,8 @@ pub fn classic_context_menu() -> ContextMenuDocument {
         id: CLASSIC_CONTEXT_MENU_ID.into(),
         name: "Classic v1".into(),
         items: vec![
+            ContextMenuItem::text("app-title", "{i18n.window_title}"),
+            ContextMenuItem::separator("app-title-separator"),
             ContextMenuItem::action("refresh", "Refresh", Action::Refresh),
             frequency,
             providers,
