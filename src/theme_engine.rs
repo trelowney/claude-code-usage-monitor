@@ -1309,36 +1309,120 @@ impl DataContext {
         }
         if let Some(data) = data {
             for descriptor in PROVIDER_DESCRIPTORS {
-                context.insert_provider(descriptor.key, data.get(descriptor.id));
+                context.insert_provider(
+                    descriptor.key,
+                    data.get(descriptor.id),
+                    descriptor.id == ProviderId::Codex,
+                );
             }
             let active = ProviderId::ALL
                 .into_iter()
-                .find_map(|provider| data.get(provider));
-            context.insert_provider("active", active);
+                .find_map(|provider| data.get(provider).map(|usage| (provider, usage)));
+            context.insert_provider(
+                "active",
+                active.map(|(_, usage)| usage),
+                active.is_some_and(|(provider, _)| provider == ProviderId::Codex),
+            );
         } else {
             for descriptor in PROVIDER_DESCRIPTORS {
-                context.insert_provider(descriptor.key, None);
+                context.insert_provider(descriptor.key, None, descriptor.id == ProviderId::Codex);
             }
-            context.insert_provider("active", None);
+            context.insert_provider("active", None, false);
         }
         context
     }
 
-    fn insert_provider(&mut self, name: &str, usage: Option<&crate::models::UsageData>) {
+    fn insert_provider(
+        &mut self,
+        name: &str,
+        usage: Option<&crate::models::UsageData>,
+        codex_compatibility: bool,
+    ) {
         let weekly_label = usage
             .and_then(|usage| usage.weekly_label.as_deref())
             .or_else(|| self.get_string("i18n.weekly_window"))
             .unwrap_or("7d")
             .to_string();
         self.insert_string(&format!("{name}.weekly.label"), weekly_label);
-        let (session, weekly) = usage
+        let (five_hour, weekly) = usage
             .map(|usage| (usage.session.percentage, usage.weekly.percentage))
             .unwrap_or((0.0, 0.0));
+        // Before Codex windows were classified by duration, a weekly-only
+        // response arrived in the primary slot and was exposed to themes as
+        // `codex.session`. Keep that established binding working for existing
+        // custom themes, while `codex.five_hour` always means the real window.
+        let use_codex_session_fallback = codex_compatibility
+            && usage.is_some_and(|usage| {
+                usage.session.resets_at.is_none()
+                    && usage.session.percentage == 0.0
+                    && (usage.weekly.resets_at.is_some() || usage.weekly.percentage != 0.0)
+            });
+        let session = if use_codex_session_fallback {
+            weekly
+        } else {
+            five_hour
+        };
         self.insert(&format!("{name}.session.percentage"), session);
         self.insert(&format!("{name}.session.remaining"), 100.0 - session);
+        self.insert(&format!("{name}.five_hour.percentage"), five_hour);
+        self.insert(&format!("{name}.five_hour.remaining"), 100.0 - five_hour);
         self.insert(&format!("{name}.weekly.percentage"), weekly);
         self.insert(&format!("{name}.weekly.remaining"), 100.0 - weekly);
+        let monthly = usage.and_then(|usage| usage.monthly.as_ref());
+        if let Some(monthly) = monthly {
+            self.insert_string(&format!("{name}.monthly.label"), "30d");
+            self.insert(&format!("{name}.monthly.percentage"), monthly.percentage);
+            self.insert(
+                &format!("{name}.monthly.remaining"),
+                100.0 - monthly.percentage,
+            );
+        } else {
+            self.insert(&format!("{name}.monthly.percentage"), 0.0);
+            self.insert(&format!("{name}.monthly.remaining"), 100.0);
+        }
+        self.insert(
+            &format!("{name}.monthly.available"),
+            monthly.is_some() as u8 as f64,
+        );
         self.insert(&format!("{name}.available"), usage.is_some() as u8 as f64);
+        // Carried over from an earlier poll: real figures, not current ones.
+        self.insert(
+            &format!("{name}.stale"),
+            usage.is_some_and(|usage| usage.stale) as u8 as f64,
+        );
+        // Credits are absent for most accounts, so `credits.available` is what
+        // a theme should gate the overlay on rather than `available`.
+        let credits = usage.and_then(|usage| usage.credits.as_ref());
+        let credits_percentage = credits.map(|credits| credits.percentage).unwrap_or(0.0);
+        self.insert(&format!("{name}.credits.percentage"), credits_percentage);
+        self.insert(
+            &format!("{name}.credits.remaining"),
+            100.0 - credits_percentage,
+        );
+        // Currency, unlike the percentages either side of it.
+        self.insert(
+            &format!("{name}.credits.balance"),
+            credits.map(|credits| credits.remaining).unwrap_or(0.0),
+        );
+        self.insert(
+            &format!("{name}.credits.total"),
+            credits.map(|credits| credits.total).unwrap_or(0.0),
+        );
+        self.insert(
+            &format!("{name}.credits.available"),
+            credits.is_some() as u8 as f64,
+        );
+        // The single figure a badge should show: whatever is closest to its
+        // limit. A provider can switch a window off entirely -- Codex has its
+        // five-hour window disabled -- so binding a badge to one window alone
+        // leaves it reporting 0% while another allowance is spent.
+        self.insert(
+            &format!("{name}.headline.percentage"),
+            match credits {
+                Some(credits) => credits.percentage,
+                None => five_hour.max(weekly),
+            },
+        );
         let reset_value = |reset: Option<std::time::SystemTime>| {
             let unix = reset
                 .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1350,13 +1434,22 @@ impl DataContext {
                 .unwrap_or(0.0);
             (unix, seconds)
         };
-        let (session_unix, session_seconds) =
+        let (five_hour_unix, five_hour_seconds) =
             reset_value(usage.and_then(|value| value.session.resets_at));
         let (weekly_unix, weekly_seconds) =
             reset_value(usage.and_then(|value| value.weekly.resets_at));
+        let (session_unix, session_seconds) = if use_codex_session_fallback {
+            (weekly_unix, weekly_seconds)
+        } else {
+            (five_hour_unix, five_hour_seconds)
+        };
+        let (monthly_unix, monthly_seconds) =
+            reset_value(monthly.and_then(|value| value.resets_at));
         for (window, unix, seconds) in [
             ("session", session_unix, session_seconds),
+            ("five_hour", five_hour_unix, five_hour_seconds),
             ("weekly", weekly_unix, weekly_seconds),
+            ("monthly", monthly_unix, monthly_seconds),
         ] {
             self.insert(&format!("{name}.{window}.reset.unix"), unix);
             self.insert(&format!("{name}.{window}.reset.seconds"), seconds);

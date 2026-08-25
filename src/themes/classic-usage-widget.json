@@ -717,7 +717,7 @@
         {
           "id": "claude-weekly-value-dark",
           "name": "dark Claude Code 7-day value",
-          "render": "system.dark",
+          "render": "(system.dark) && !claude.credits.available",
           "parent": "claude-provider",
           "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
           "y": "28",
@@ -788,7 +788,7 @@
         {
           "id": "claude-weekly-value-light",
           "name": "light Claude Code 7-day value",
-          "render": "1 - system.dark",
+          "render": "(1 - system.dark) && !claude.credits.available",
           "parent": "claude-provider",
           "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
           "y": "28",
@@ -819,14 +819,14 @@
         {
           "id": "codex-session-segments-dark",
           "name": "dark Codex 5-hour segments",
-          "render": "(system.dark) && (codex.session.percentage < 80)",
+          "render": "(system.dark) && (codex.five_hour.percentage < 80)",
           "parent": "codex-provider",
           "y": "5",
           "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
           "height": "13",
           "content": {
             "type": "progress",
-            "value": "codex.session.percentage",
+            "value": "codex.five_hour.percentage",
             "direction": "left_to_right",
             "fill": {
               "color": "#F5F5F5FF"
@@ -843,14 +843,14 @@
         {
           "id": "codex-session-segments-dark-high",
           "name": "dark Codex 5-hour segments (high usage)",
-          "render": "(system.dark) && (codex.session.percentage >= 80)",
+          "render": "(system.dark) && (codex.five_hour.percentage >= 80)",
           "parent": "codex-provider",
           "y": "5",
           "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
           "height": "13",
           "content": {
             "type": "progress",
-            "value": "codex.session.percentage",
+            "value": "codex.five_hour.percentage",
             "direction": "left_to_right",
             "fill": {
               "color": "#DC2626FF"
@@ -875,7 +875,7 @@
           "height": "13",
           "content": {
             "type": "text",
-            "template": "{codex.session:usage_line}",
+            "template": "{codex.five_hour:usage_line}",
             "font_family": "Segoe UI",
             "font_size": "12",
             "weight": "medium",
@@ -890,14 +890,14 @@
         {
           "id": "codex-session-segments-light",
           "name": "light Codex 5-hour segments",
-          "render": "(1 - system.dark) && (codex.session.percentage < 80)",
+          "render": "(1 - system.dark) && (codex.five_hour.percentage < 80)",
           "parent": "codex-provider",
           "y": "5",
           "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
           "height": "13",
           "content": {
             "type": "progress",
-            "value": "codex.session.percentage",
+            "value": "codex.five_hour.percentage",
             "direction": "left_to_right",
             "fill": {
               "color": "#1F1F1FFF"
@@ -914,14 +914,14 @@
         {
           "id": "codex-session-segments-light-high",
           "name": "light Codex 5-hour segments (high usage)",
-          "render": "(1 - system.dark) && (codex.session.percentage >= 80)",
+          "render": "(1 - system.dark) && (codex.five_hour.percentage >= 80)",
           "parent": "codex-provider",
           "y": "5",
           "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
           "height": "13",
           "content": {
             "type": "progress",
-            "value": "codex.session.percentage",
+            "value": "codex.five_hour.percentage",
             "direction": "left_to_right",
             "fill": {
               "color": "#DC2626FF"
@@ -946,7 +946,7 @@
           "height": "13",
           "content": {
             "type": "text",
-            "template": "{codex.session:usage_line}",
+            "template": "{codex.five_hour:usage_line}",
             "font_family": "Segoe UI",
             "font_size": "12",
             "weight": "medium",
@@ -1009,7 +1009,7 @@
         {
           "id": "codex-weekly-value-dark",
           "name": "dark Codex 7-day value",
-          "render": "system.dark",
+          "render": "(system.dark) && !codex.credits.available",
           "parent": "codex-provider",
           "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
           "y": "28",
@@ -1080,7 +1080,7 @@
         {
           "id": "codex-weekly-value-light",
           "name": "light Codex 7-day value",
-          "render": "1 - system.dark",
+          "render": "(1 - system.dark) && !codex.credits.available",
           "parent": "codex-provider",
           "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
           "y": "28",
@@ -1681,6 +1681,310 @@
             "align": "left",
             "color": {
               "color": "#1B5E20FF"
+            }
+          }
+        },
+        {
+          "id": "claude-credits-segments-dark",
+          "name": "dark claude credit overlay",
+          "render": "((system.dark) && claude.credits.available) && (claude.credits.percentage < 80)",
+          "parent": "claude-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "claude.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "claude-credits-segments-dark-high",
+          "name": "dark claude credit overlay (high usage)",
+          "render": "((system.dark) && claude.credits.available) && (claude.credits.percentage >= 80)",
+          "parent": "claude-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "claude.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "claude-credits-value-dark",
+          "name": "dark claude credit balance",
+          "render": "(system.dark) && claude.credits.available",
+          "parent": "claude-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${claude.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            }
+          }
+        },
+        {
+          "id": "claude-credits-segments-light",
+          "name": "light claude credit overlay",
+          "render": "((1 - system.dark) && claude.credits.available) && (claude.credits.percentage < 80)",
+          "parent": "claude-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "claude.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#C77700FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "claude-credits-segments-light-high",
+          "name": "light claude credit overlay (high usage)",
+          "render": "((1 - system.dark) && claude.credits.available) && (claude.credits.percentage >= 80)",
+          "parent": "claude-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "claude.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "claude-credits-value-light",
+          "name": "light claude credit balance",
+          "render": "(1 - system.dark) && claude.credits.available",
+          "parent": "claude-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${claude.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#C77700FF",
+              "opacity": "1"
+            }
+          }
+        },
+        {
+          "id": "codex-credits-segments-dark",
+          "name": "dark codex credit overlay",
+          "render": "((system.dark) && codex.credits.available) && (codex.credits.percentage < 80)",
+          "parent": "codex-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "codex.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "codex-credits-segments-dark-high",
+          "name": "dark codex credit overlay (high usage)",
+          "render": "((system.dark) && codex.credits.available) && (codex.credits.percentage >= 80)",
+          "parent": "codex-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "codex.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "codex-credits-value-dark",
+          "name": "dark codex credit balance",
+          "render": "(system.dark) && codex.credits.available",
+          "parent": "codex-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${codex.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            }
+          }
+        },
+        {
+          "id": "codex-credits-segments-light",
+          "name": "light codex credit overlay",
+          "render": "((1 - system.dark) && codex.credits.available) && (codex.credits.percentage < 80)",
+          "parent": "codex-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "codex.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#C77700FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "codex-credits-segments-light-high",
+          "name": "light codex credit overlay (high usage)",
+          "render": "((1 - system.dark) && codex.credits.available) && (codex.credits.percentage >= 80)",
+          "parent": "codex-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "codex.credits.percentage",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "codex-credits-value-light",
+          "name": "light codex credit balance",
+          "render": "(1 - system.dark) && codex.credits.available",
+          "parent": "codex-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${codex.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#C77700FF",
+              "opacity": "1"
             }
           }
         }

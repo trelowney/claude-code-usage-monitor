@@ -307,6 +307,9 @@ fn usage_lines_handle_loading_errors_missing_resets_and_language() {
             },
             weekly: crate::models::UsageSection::default(),
             weekly_label: None,
+            monthly: None,
+            credits: None,
+            stale: false,
         },
     )]);
     let ready = DataContext::from_usage_with_runtime(
@@ -364,10 +367,12 @@ fn starter_theme_round_trips_and_validates() {
         })
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
-    // 1.4.9 palette follows the taskbar mode without runtime recolouring,
+    // 1.4.9 palette follows the taskbar mode without runtime recolouring:
+    // five providers over two windows in two modes, plus a credit overlay on
+    // the weekly row of the two providers that report credits (24 total),
     // and separate normal/high-usage (>=80%) variants of each of those so
     // segments turn red without any runtime recolouring either.
-    assert_eq!(segments, vec![10; 40]);
+    assert_eq!(segments, vec![10; (5 * 2 * 2 + 2 * 2) * 2]);
     assert!(theme.surfaces[0]
         .children
         .iter()
@@ -478,6 +483,9 @@ fn reset_stats_and_duration_formats_are_available_to_every_provider() {
             },
             weekly: crate::models::UsageSection::default(),
             weekly_label: None,
+            monthly: None,
+            credits: None,
+            stale: false,
         },
     )]);
     let context = DataContext::from_usage(Some(&usage), &Canvas::default());
@@ -501,6 +509,47 @@ fn provider_specific_long_window_labels_are_available_to_templates() {
     let context = DataContext::from_usage(Some(&usage), &Canvas::default());
     assert_eq!(format_template("{opencode.weekly.label}", &context), "30d");
     assert_eq!(format_template("{claude.weekly.label}", &context), "7d");
+}
+
+#[test]
+fn opencode_monthly_window_is_available_to_templates_when_present() {
+    let reset = std::time::SystemTime::now() + std::time::Duration::from_secs(1_713_621);
+    let usage = crate::models::AppUsageData::from_iter([(
+        ProviderId::OpenCode,
+        crate::models::UsageData {
+            weekly_label: Some("30d".into()),
+            monthly: Some(crate::models::UsageSection {
+                percentage: 43.0,
+                resets_at: Some(reset),
+            }),
+            ..Default::default()
+        },
+    )]);
+    let context = DataContext::from_usage(Some(&usage), &Canvas::default());
+    assert_eq!(
+        evaluate("opencode.monthly.percentage", &context).unwrap(),
+        43.0
+    );
+    assert_eq!(
+        evaluate("opencode.monthly.remaining", &context).unwrap(),
+        57.0
+    );
+    assert_eq!(
+        evaluate("opencode.monthly.available", &context).unwrap(),
+        1.0
+    );
+    assert_eq!(format_template("{opencode.monthly.label}", &context), "30d");
+    assert_eq!(
+        format_template("{opencode.monthly.percentage:0.0}%", &context),
+        "43.0%"
+    );
+    assert!(evaluate("opencode.monthly.reset.seconds", &context).unwrap() > 1_713_600.0);
+    // Providers without a monthly window expose safe zeros and an availability flag.
+    assert_eq!(evaluate("claude.monthly.available", &context).unwrap(), 0.0);
+    assert_eq!(
+        evaluate("claude.monthly.percentage", &context).unwrap(),
+        0.0
+    );
 }
 
 #[test]
@@ -1348,5 +1397,152 @@ fn hit_testing_selects_the_topmost_interactive_layer() {
     assert_eq!(
         hit_test_mouse_event(&theme, 0, 25.0, 25.0, None, ThemeRuntime::default()),
         Some("top".into())
+    );
+}
+
+#[test]
+fn headline_follows_the_window_closest_to_its_limit() {
+    use crate::models::{CreditsSection, UsageData, UsageSection};
+
+    let percent = |value: f64| UsageSection {
+        percentage: value,
+        resets_at: None,
+    };
+    let context = |usage: UsageData| {
+        DataContext::from_usage(
+            Some(&AppUsageData::from_iter([(ProviderId::Codex, usage)])),
+            &Canvas::default(),
+        )
+    };
+
+    // A disabled session window must not hold the badge at zero while the
+    // weekly allowance is spent.
+    let spent_weekly = context(UsageData {
+        session: percent(0.0),
+        weekly: percent(100.0),
+        ..Default::default()
+    });
+    assert_eq!(spent_weekly.get("codex.headline.percentage"), Some(100.0));
+
+    let busy_session = context(UsageData {
+        session: percent(72.0),
+        weekly: percent(12.0),
+        ..Default::default()
+    });
+    assert_eq!(busy_session.get("codex.headline.percentage"), Some(72.0));
+
+    // Once credits are covering the overflow they are the live figure.
+    let on_credits = context(UsageData {
+        session: percent(0.0),
+        weekly: percent(100.0),
+        credits: Some(CreditsSection {
+            percentage: 41.0,
+            remaining: 24.1,
+            total: 40.83,
+        }),
+        ..Default::default()
+    });
+    assert_eq!(on_credits.get("codex.headline.percentage"), Some(41.0));
+}
+
+#[test]
+fn codex_session_bindings_fall_back_without_hiding_the_exact_five_hour_window() {
+    use crate::models::{UsageData, UsageSection};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let reset = UNIX_EPOCH + Duration::from_secs(1_787_198_224);
+    let usage = UsageData {
+        session: UsageSection::default(),
+        weekly: UsageSection {
+            percentage: 83.0,
+            resets_at: Some(reset),
+        },
+        ..Default::default()
+    };
+    let context = DataContext::from_usage(
+        Some(&AppUsageData::from_iter([(ProviderId::Codex, usage)])),
+        &Canvas::default(),
+    );
+
+    // Existing custom themes keep the primary-window behavior they saw
+    // before Codex windows were classified by duration.
+    assert_eq!(context.get("codex.session.percentage"), Some(83.0));
+    assert_eq!(context.get("codex.session.remaining"), Some(17.0));
+    assert_eq!(
+        context.get("codex.session.reset.unix"),
+        context.get("codex.weekly.reset.unix")
+    );
+    assert_eq!(context.get("active.session.percentage"), Some(83.0));
+
+    // New and bundled themes can still address the actual five-hour window.
+    assert_eq!(context.get("codex.five_hour.percentage"), Some(0.0));
+    assert_eq!(context.get("codex.five_hour.remaining"), Some(100.0));
+    assert_eq!(context.get("codex.five_hour.reset.unix"), Some(0.0));
+    assert_eq!(context.get("codex.weekly.percentage"), Some(83.0));
+}
+
+#[test]
+fn codex_session_bindings_use_the_real_five_hour_window_when_present() {
+    use crate::models::{UsageData, UsageSection};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let usage = UsageData {
+        session: UsageSection {
+            percentage: 12.0,
+            resets_at: Some(UNIX_EPOCH + Duration::from_secs(1_787_100_000)),
+        },
+        weekly: UsageSection {
+            percentage: 83.0,
+            resets_at: Some(UNIX_EPOCH + Duration::from_secs(1_787_198_224)),
+        },
+        ..Default::default()
+    };
+    let context = DataContext::from_usage(
+        Some(&AppUsageData::from_iter([(ProviderId::Codex, usage)])),
+        &Canvas::default(),
+    );
+
+    assert_eq!(context.get("codex.session.percentage"), Some(12.0));
+    assert_eq!(context.get("codex.five_hour.percentage"), Some(12.0));
+    assert_ne!(
+        context.get("codex.session.reset.unix"),
+        context.get("codex.weekly.reset.unix")
+    );
+}
+
+#[test]
+fn credit_badges_abbreviate_a_balance_too_wide_for_the_tray() {
+    use crate::models::{CreditsSection, UsageData};
+
+    let context = |balance: f64| {
+        DataContext::from_usage(
+            Some(&AppUsageData::from_iter([(
+                ProviderId::Codex,
+                UsageData {
+                    credits: Some(CreditsSection {
+                        percentage: 10.0,
+                        remaining: balance,
+                        total: 2000.0,
+                    }),
+                    ..Default::default()
+                },
+            )])),
+            &Canvas::default(),
+        )
+    };
+
+    // Up to three figures the badge shows whole dollars.
+    assert_eq!(
+        format_template("{codex.credits.balance:0}", &context(39.25)),
+        "39"
+    );
+    assert_eq!(
+        format_template("{codex.credits.balance:0}", &context(450.0)),
+        "450"
+    );
+    // Four will not fit, so the tray falls back to thousands.
+    assert_eq!(
+        format_template("{codex.credits.balance / 1000:0.0}k", &context(1234.0)),
+        "1.2k"
     );
 }

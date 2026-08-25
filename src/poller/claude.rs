@@ -1,15 +1,16 @@
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use super::claude_desktop;
 use super::{
     build_agent, get_header_f64, get_header_i64, parse_iso8601, unix_to_system_time, PollError,
 };
 use crate::diagnose;
-use crate::models::UsageData;
+use crate::models::{CreditsSection, UsageData};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -20,6 +21,30 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 struct UsageResponse {
     five_hour: Option<UsageBucket>,
     seven_day: Option<UsageBucket>,
+    spend: Option<SpendResponse>,
+}
+
+/// Paid credits that carry the account past its plan limits. Amounts are
+/// minor units with their own exponent, so the currency is self-describing.
+#[derive(Deserialize)]
+struct SpendResponse {
+    #[serde(default)]
+    enabled: bool,
+    used: Option<SpendAmount>,
+    limit: Option<SpendAmount>,
+}
+
+#[derive(Deserialize)]
+struct SpendAmount {
+    amount_minor: f64,
+    #[serde(default)]
+    exponent: u32,
+}
+
+impl SpendAmount {
+    fn major(&self) -> f64 {
+        self.amount_minor / 10f64.powi(self.exponent as i32)
+    }
 }
 
 #[derive(Deserialize)]
@@ -34,10 +59,16 @@ struct Credentials {
     source: CredentialSource,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum CredentialSource {
     Windows(PathBuf),
-    Wsl { distro: String },
+    /// The Claude desktop app's own token cache, used when Claude Code has
+    /// only ever run inside the desktop app and no CLI login wrote
+    /// `~/.claude/.credentials.json`.
+    DesktopApp(PathBuf),
+    Wsl {
+        distro: String,
+    },
 }
 
 pub(super) fn poll_claude_code() -> Result<UsageData, PollError> {
@@ -91,13 +122,24 @@ pub(super) fn try_usage_endpoint(token: &str) -> Result<Option<UsageData>, PollE
         .call()
     {
         Ok(resp) => resp,
-        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
-            diagnose::log(format!(
-                "usage endpoint returned auth error status {code}; re-login required"
-            ));
-            return Err(PollError::AuthRequired);
-        }
-        Err(_) => return Ok(None),
+        Err(error) => match classify_usage_failure(&error) {
+            UsageEndpointFailure::Auth => {
+                diagnose::log(format!(
+                    "usage endpoint returned an auth error ({error}); re-login required"
+                ));
+                return Err(PollError::AuthRequired);
+            }
+            UsageEndpointFailure::Transient => {
+                diagnose::log(format!("usage endpoint temporarily unavailable ({error})"));
+                return Err(PollError::RequestFailed);
+            }
+            UsageEndpointFailure::Unsupported => {
+                diagnose::log(format!(
+                    "usage endpoint unavailable for this account ({error}); trying the Messages API"
+                ));
+                return Ok(None);
+            }
+        },
     };
 
     let response: UsageResponse = match resp.into_json() {
@@ -116,7 +158,63 @@ pub(super) fn try_usage_endpoint(token: &str) -> Result<Option<UsageData>, PollE
         data.weekly.resets_at = parse_iso8601(bucket.resets_at.as_deref());
     }
 
+    data.credits = response
+        .spend
+        .as_ref()
+        .and_then(|spend| claude_credits(spend, &data));
+
     Ok(Some(data))
+}
+
+/// What a failed call to the usage endpoint actually tells us.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageEndpointFailure {
+    /// The credentials were rejected.
+    Auth,
+    /// Rate limited, a server-side fault, or the network. Retrying later is
+    /// the right move. Asking the Messages API instead would spend real quota
+    /// on a request whose only purpose is to read headers, and during a rate
+    /// limit it would add to the load that caused it.
+    Transient,
+    /// The endpoint is not usable on this account, which is what the Messages
+    /// API fallback exists for.
+    Unsupported,
+}
+
+fn classify_usage_failure(error: &ureq::Error) -> UsageEndpointFailure {
+    match error {
+        ureq::Error::Status(401 | 403, _) => UsageEndpointFailure::Auth,
+        ureq::Error::Status(429, _) => UsageEndpointFailure::Transient,
+        ureq::Error::Status(code, _) if *code >= 500 => UsageEndpointFailure::Transient,
+        ureq::Error::Status(_, _) => UsageEndpointFailure::Unsupported,
+        ureq::Error::Transport(_) => UsageEndpointFailure::Transient,
+    }
+}
+
+/// Unlike Codex, the plan states its own ceiling, so the gauge needs no
+/// history: `used` is already the spend against the current cap, and a
+/// non-zero figure is the same "credits are in play" observation that the
+/// Codex balance gives by falling. Accounts with extra usage switched off
+/// report it disabled and get no gauge rather than an empty one.
+fn claude_credits(spend: &SpendResponse, data: &UsageData) -> Option<CreditsSection> {
+    let used = spend.used.as_ref()?.major();
+    let total = spend.limit.as_ref()?.major();
+    if !spend.enabled || !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+
+    // Hold the ordinary windows until one of them is spent and credits have
+    // started covering the overflow.
+    let limit_reached = data.session.percentage >= 100.0 || data.weekly.percentage >= 100.0;
+    if !limit_reached || used <= 0.0 {
+        return None;
+    }
+
+    Some(CreditsSection {
+        percentage: ((used / total) * 100.0).clamp(0.0, 100.0),
+        remaining: (total - used).max(0.0),
+        total,
+    })
 }
 
 pub(super) fn fetch_usage_via_messages(token: &str) -> Result<UsageData, PollError> {
@@ -244,6 +342,11 @@ fn refresh_or_fallback(mut credentials: Credentials) -> Result<Credentials, Poll
 fn cli_refresh_token(source: &CredentialSource) {
     match source {
         CredentialSource::Windows(_) => cli_refresh_windows_token(),
+        // The desktop app owns this token and refreshes it itself, so there is
+        // nothing to drive from here; re-reading the cache is the whole retry.
+        CredentialSource::DesktopApp(_) => {
+            diagnose::log("Claude desktop app refreshes its own token; re-reading the cache")
+        }
         CredentialSource::Wsl { distro } => cli_refresh_wsl_token(distro),
     }
 }
@@ -346,22 +449,49 @@ fn resolve_windows_claude_path() -> String {
         }
     }
 
+    if let Some(bundled) = bundled_desktop_claude_path() {
+        return bundled.to_string_lossy().into_owned();
+    }
+
     "claude.cmd".to_string()
 }
 
-fn read_first_credentials() -> Option<Credentials> {
-    read_windows_credentials().or_else(|| {
-        list_wsl_distros()
-            .into_iter()
-            .find_map(|distro| read_wsl_credentials(&distro))
-    })
+/// The desktop app ships its own Claude Code build under
+/// `%APPDATA%\Claude\claude-code\<version>\claude.exe`, which is the only
+/// Claude binary present when the standalone CLI was never installed.
+fn bundled_desktop_claude_path() -> Option<PathBuf> {
+    let versions = dirs::config_dir()?.join("Claude").join("claude-code");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(versions)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("claude.exe"))
+        .filter(|path| path.is_file())
+        .collect();
+    // Directory order is not version order; the newest install wins.
+    candidates.sort_by(|left, right| {
+        bundled_claude_version(left)
+            .cmp(&bundled_claude_version(right))
+            .then_with(|| left.cmp(right))
+    });
+    candidates.pop()
 }
 
-fn read_windows_credentials() -> Option<Credentials> {
-    let CredentialSource::Windows(path) = windows_credential_source()? else {
-        return None;
-    };
-    let content = match std::fs::read_to_string(&path) {
+fn bundled_claude_version(path: &Path) -> Option<Vec<u64>> {
+    path.parent()?
+        .file_name()?
+        .to_str()?
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()
+}
+
+fn read_first_credentials() -> Option<Credentials> {
+    credential_sources_in_order().find_map(|source| read_credentials_from_source(&source))
+}
+
+fn read_windows_credentials(path: &Path) -> Option<Credentials> {
+    let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) => {
             if diagnose::is_enabled() {
@@ -373,15 +503,23 @@ fn read_windows_credentials() -> Option<Credentials> {
             return None;
         }
     };
-    parse_credentials(&content, CredentialSource::Windows(path))
+    parse_credentials(&content, CredentialSource::Windows(path.to_path_buf()))
+}
+
+fn read_desktop_app_credentials(path: &Path) -> Option<Credentials> {
+    let token = claude_desktop::read_token(path)?;
+    diagnose::log("using the Claude desktop app token cache");
+    Some(Credentials {
+        access_token: token.access_token,
+        expires_at: token.expires_at,
+        source: CredentialSource::DesktopApp(path.to_path_buf()),
+    })
 }
 
 fn read_credentials_from_source(source: &CredentialSource) -> Option<Credentials> {
     match source {
-        CredentialSource::Windows(path) => {
-            let content = std::fs::read_to_string(path).ok()?;
-            parse_credentials(&content, source.clone())
-        }
+        CredentialSource::Windows(path) => read_windows_credentials(path),
+        CredentialSource::DesktopApp(path) => read_desktop_app_credentials(path),
         CredentialSource::Wsl { distro } => read_wsl_credentials(distro),
     }
 }
@@ -429,33 +567,27 @@ fn parse_credentials(content: &str, source: CredentialSource) -> Option<Credenti
 }
 
 fn read_next_credentials_after(source: &CredentialSource) -> Option<Credentials> {
-    let distros = list_wsl_distros();
-    let candidates: Box<dyn Iterator<Item = String>> = match source {
-        CredentialSource::Windows(_) => Box::new(distros.into_iter()),
-        CredentialSource::Wsl { distro } => Box::new(
-            distros
-                .into_iter()
-                .skip_while({
-                    let distro = distro.clone();
-                    move |candidate| candidate != &distro
-                })
-                .skip(1),
-        ),
-    };
-    candidates
-        .filter_map(|distro| read_wsl_credentials(&distro))
-        .next()
+    credential_sources_in_order()
+        .skip_while(|candidate| candidate != source)
+        .skip(1)
+        .find_map(|candidate| read_credentials_from_source(&candidate))
+}
+
+/// Credential sources, cheapest first. The WSL probe stays lazy so a machine
+/// that resolves a token locally never has to spawn `wsl.exe`.
+fn credential_sources_in_order() -> impl Iterator<Item = CredentialSource> {
+    windows_credential_source()
+        .into_iter()
+        .chain(desktop_app_credential_source())
+        .chain(
+            std::iter::once_with(list_wsl_distros)
+                .flatten()
+                .map(|distro| CredentialSource::Wsl { distro }),
+        )
 }
 
 fn all_known_credential_sources() -> Vec<CredentialSource> {
-    windows_credential_source()
-        .into_iter()
-        .chain(
-            list_wsl_distros()
-                .into_iter()
-                .map(|distro| CredentialSource::Wsl { distro }),
-        )
-        .collect()
+    credential_sources_in_order().collect()
 }
 
 fn windows_credential_source() -> Option<CredentialSource> {
@@ -464,9 +596,14 @@ fn windows_credential_source() -> Option<CredentialSource> {
     ))
 }
 
+fn desktop_app_credential_source() -> Option<CredentialSource> {
+    claude_desktop::config_path().map(CredentialSource::DesktopApp)
+}
+
 fn credential_watch_signature(source: &CredentialSource) -> Option<String> {
     match source {
         CredentialSource::Windows(path) => Some(windows_credential_watch_signature(path)),
+        CredentialSource::DesktopApp(path) => Some(claude_desktop::watch_signature(path)),
         CredentialSource::Wsl { distro } => wsl_credential_watch_signature(distro),
     }
 }
@@ -608,5 +745,150 @@ fn wait_for_refresh(child: &mut std::process::Child) {
             Ok(None) => std::thread::sleep(Duration::from_millis(500)),
             Err(_) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn bundled_claude_versions_sort_numerically() {
+        let older = bundled_claude_version(Path::new("Claude/claude-code/2.1.9/claude.exe"));
+        let newer = bundled_claude_version(Path::new("Claude/claude-code/2.1.10/claude.exe"));
+
+        assert!(newer > older);
+    }
+
+    #[test]
+    fn bundled_claude_versions_reject_non_numeric_directories() {
+        let version = bundled_claude_version(Path::new("Claude/claude-code/current/claude.exe"));
+
+        assert_eq!(version, None);
+    }
+
+    fn usage_from_json(json: &str) -> UsageData {
+        let response: UsageResponse =
+            serde_json::from_str(json).expect("the fixture should deserialize");
+        let mut data = UsageData::default();
+        if let Some(bucket) = &response.seven_day {
+            data.weekly.percentage = bucket.utilization;
+        }
+        if let Some(bucket) = &response.five_hour {
+            data.session.percentage = bucket.utilization;
+        }
+        data.credits = response
+            .spend
+            .as_ref()
+            .and_then(|spend| claude_credits(spend, &data));
+        data
+    }
+
+    fn status_error(code: u16) -> ureq::Error {
+        ureq::Error::Status(
+            code,
+            ureq::Response::new(code, "status", "").expect("response"),
+        )
+    }
+
+    #[test]
+    fn rate_limits_and_server_faults_do_not_trigger_the_messages_fallback() {
+        // Spending quota on a Messages request is the wrong answer to being
+        // rate limited, and it feeds the condition that caused it.
+        assert_eq!(
+            classify_usage_failure(&status_error(429)),
+            UsageEndpointFailure::Transient
+        );
+        assert_eq!(
+            classify_usage_failure(&status_error(500)),
+            UsageEndpointFailure::Transient
+        );
+        assert_eq!(
+            classify_usage_failure(&status_error(503)),
+            UsageEndpointFailure::Transient
+        );
+    }
+
+    #[test]
+    fn rejected_credentials_are_kept_separate_from_an_absent_endpoint() {
+        assert_eq!(
+            classify_usage_failure(&status_error(401)),
+            UsageEndpointFailure::Auth
+        );
+        assert_eq!(
+            classify_usage_failure(&status_error(403)),
+            UsageEndpointFailure::Auth
+        );
+        // A 404 is the case the Messages API fallback exists to cover.
+        assert_eq!(
+            classify_usage_failure(&status_error(404)),
+            UsageEndpointFailure::Unsupported
+        );
+    }
+
+    #[test]
+    fn spend_becomes_a_credit_gauge_against_the_plan_cap() {
+        // Shape taken from a live /api/oauth/usage response.
+        let data = usage_from_json(
+            r#"{
+                "seven_day": {"utilization": 100.0, "resets_at": null},
+                "spend": {
+                    "used": {"amount_minor": 1359, "currency": "USD", "exponent": 2},
+                    "limit": {"amount_minor": 5000, "currency": "USD", "exponent": 2},
+                    "percent": 27,
+                    "enabled": true
+                }
+            }"#,
+        );
+
+        let credits = data.credits.expect("enabled spend should expose a gauge");
+        assert!((credits.percentage - 27.18).abs() < 0.01, "{credits:?}");
+        assert!((credits.remaining - 36.41).abs() < 0.001, "{credits:?}");
+        assert_eq!(credits.total, 50.0);
+    }
+
+    #[test]
+    fn disabled_or_uncapped_spend_gets_no_gauge() {
+        assert!(usage_from_json(
+            r#"{"seven_day": {"utilization": 100.0},
+                "spend": {"used": {"amount_minor": 0, "exponent": 2},
+                          "limit": {"amount_minor": 5000, "exponent": 2}, "enabled": false}}"#
+        )
+        .credits
+        .is_none());
+
+        assert!(usage_from_json(
+            r#"{"seven_day": {"utilization": 100.0},
+                "spend": {"used": {"amount_minor": 10, "exponent": 2},
+                          "limit": {"amount_minor": 0, "exponent": 2}, "enabled": true}}"#
+        )
+        .credits
+        .is_none());
+
+        assert!(usage_from_json(r#"{"seven_day": {"utilization": 1.0}}"#)
+            .credits
+            .is_none());
+    }
+
+    #[test]
+    fn the_gauge_waits_for_a_spent_window_and_for_credits_to_be_in_play() {
+        let spend = r#""spend": {"used": {"amount_minor": 1359, "exponent": 2},
+                                 "limit": {"amount_minor": 5000, "exponent": 2}, "enabled": true}"#;
+
+        // Room left in both windows, so the bars stay on the ordinary limits.
+        let json = format!(r#"{{"five_hour": {{"utilization": 40.0}}, {spend}}}"#);
+        assert!(usage_from_json(&json).credits.is_none());
+
+        // A spent five-hour window is enough; it need not be the weekly one.
+        let json = format!(r#"{{"five_hour": {{"utilization": 100.0}}, {spend}}}"#);
+        assert!(usage_from_json(&json).credits.is_some());
+
+        // Spent window, but nothing charged to credits yet.
+        let json = r#"{"five_hour": {"utilization": 100.0},
+                       "spend": {"used": {"amount_minor": 0, "exponent": 2},
+                                 "limit": {"amount_minor": 5000, "exponent": 2},
+                                 "enabled": true}}"#;
+        assert!(usage_from_json(json).credits.is_none());
     }
 }
