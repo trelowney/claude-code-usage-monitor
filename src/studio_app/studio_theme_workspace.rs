@@ -294,13 +294,11 @@ impl StudioApp {
     pub(super) fn handle_dropped_files(&mut self, context: &egui::Context) {
         let dropped = context.input(|input| input.raw.dropped_files.clone());
         for file in dropped {
-            let Some(path) = file.path else {
-                continue;
-            };
-            if theme_package::is_theme_package(&path) {
-                self.import_theme_path(&path);
+            let path = file.path();
+            if theme_package::is_theme_package(path) {
+                self.import_theme_path(path);
             } else if self.page == Page::Assets {
-                if let Some(asset) = self.import_asset_path(&path) {
+                if let Some(asset) = self.import_asset_path(path) {
                     self.asset_page_selected = Some(asset.relative_path);
                 }
             }
@@ -721,6 +719,7 @@ impl StudioApp {
         let mut target = helper.target.clone();
         let mut property = helper.property;
         let mut value = helper.value.clone();
+        let mut url = helper.url.clone();
         let context_menus = context_menu::list_context_menus().unwrap_or_default();
         let mut context_menu_reference = helper.context_menu_reference.clone();
         let action = show_action_helper(
@@ -752,6 +751,7 @@ impl StudioApp {
                     &mut target,
                     &mut property,
                     &mut value,
+                    &mut url,
                     &context_menus,
                     &mut context_menu_reference,
                     &mut editor.draft,
@@ -786,6 +786,7 @@ impl StudioApp {
                 helper.target = target;
                 helper.property = property;
                 helper.value = value;
+                helper.url = url;
                 helper.context_menu_reference = context_menu_reference;
                 self.action_helper = Some(helper);
             }
@@ -878,7 +879,19 @@ impl StudioApp {
                 | theme_engine::LayerBackground::Image { .. } => Paint::default(),
             },
         };
-        DataContext::from_usage_with_runtime(self.usage.as_ref(), &canvas, runtime)
+        let mut context =
+            DataContext::from_usage_with_runtime(self.usage.as_ref(), &canvas, runtime);
+        let object = match selection {
+            Selection::Surface(_) => Some(surface),
+            Selection::Object(_, object_index) => surface.children.get(object_index),
+        };
+        if let Some(gap) = object
+            .and_then(|object| theme_engine::evaluate(&object.gap.0, &context).ok())
+            .filter(|value| value.is_finite())
+        {
+            context.insert("this.gap", gap.max(0.0));
+        }
+        context
     }
 
     pub(super) fn scene_tree(&mut self, ui: &mut egui::Ui, read_only: bool) {

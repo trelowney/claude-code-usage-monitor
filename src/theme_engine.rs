@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use windows::core::PCWSTR;
@@ -444,6 +445,9 @@ pub enum MouseActionTarget {
 pub enum MouseAction {
     ShowDashboard,
     ToggleDashboard,
+    OpenUrl {
+        url: String,
+    },
     ShowContextMenu {
         menu: Option<String>,
     },
@@ -483,12 +487,14 @@ pub struct MouseActionOverrideKey {
 pub enum MouseActionEffect {
     ShowDashboard,
     ToggleDashboard,
+    OpenUrl(String),
     ShowContextMenu(Option<String>),
 }
 
 /// Parse the deliberately small, line-or-semicolon separated action language.
 /// Supported forms include `show_dashboard()`, `toggle_dashboard()`,
-/// `show_context_menu()`, `show_context_menu("menu-id")`, `set(self.render, false)`,
+/// `open_url("https://example.com")`, `show_context_menu()`,
+/// `show_context_menu("menu-id")`, `set(self.render, false)`,
 /// `increase("layer-id", height, 10)`, `decrease(self.width, 5)`,
 /// `toggle(self.render)`, and `reset("layer-id", height)`.
 pub fn parse_mouse_actions(source: &str) -> Result<Vec<MouseAction>, String> {
@@ -508,6 +514,14 @@ pub fn parse_mouse_actions(source: &str) -> Result<Vec<MouseAction>, String> {
             "show_dashboard" => return Err("show_dashboard() does not take arguments".into()),
             "toggle_dashboard" if args.is_empty() => actions.push(MouseAction::ToggleDashboard),
             "toggle_dashboard" => return Err("toggle_dashboard() does not take arguments".into()),
+            "open_url" if args.len() == 1 => {
+                let url = parse_quoted_action_string(&args[0], "URL")?;
+                if !crate::context_menu::supported_url(&url) {
+                    return Err("open_url URL must start with http:// or https://".into());
+                }
+                actions.push(MouseAction::OpenUrl { url });
+            }
+            "open_url" => return Err("open_url expects one quoted URL".into()),
             "show_context_menu" if args.is_empty() => {
                 actions.push(MouseAction::ShowContextMenu { menu: None })
             }
@@ -1145,6 +1159,7 @@ pub struct ResolvedObject<'a> {
     pub height: f64,
     pub parent_width: f64,
     pub parent_height: f64,
+    pub gap: f64,
     pub opacity: f64,
     pub rotation: f64,
     pub clip: Vec<ClipRegion>,
@@ -1183,6 +1198,10 @@ pub struct ThemeRuntime {
     pub poll_ok: bool,
     pub has_error: bool,
     pub language: LanguageId,
+    /// Present each allowance as what is left rather than what is spent. Only
+    /// the `.display` values and summaries using them follow this; `.percentage`
+    /// always means consumption so severity thresholds keep their meaning.
+    pub countdown: bool,
     host_width: u32,
     host_height: u32,
 }
@@ -1194,6 +1213,7 @@ impl Default for ThemeRuntime {
             poll_ok: true,
             has_error: false,
             language: LanguageId::English,
+            countdown: false,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
         }
@@ -1221,6 +1241,7 @@ impl ThemeRuntime {
             poll_ok: true,
             has_error: false,
             language: LanguageId::English,
+            countdown: false,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
         }
@@ -1234,6 +1255,12 @@ impl ThemeRuntime {
 
     pub fn with_language(mut self, language: LanguageId) -> Self {
         self.language = language;
+        self
+    }
+
+    /// Count each allowance down towards its limit instead of up from zero.
+    pub fn with_countdown(mut self, countdown: bool) -> Self {
+        self.countdown = countdown;
         self
     }
 
@@ -1291,6 +1318,7 @@ impl DataContext {
         );
         let strings = runtime.language.strings();
         context.insert_string("i18n.window_title", strings.window_title);
+        context.insert_string("i18n.locale", runtime.language.code());
         context.insert_string("i18n.session_window", strings.session_window);
         context.insert_string("i18n.weekly_window", strings.weekly_window);
         context.insert_string("i18n.cursor_auto_window", strings.cursor_auto_window);
@@ -1301,18 +1329,41 @@ impl DataContext {
         context.insert_string("i18n.minute_suffix", strings.minute_suffix);
         context.insert_string("i18n.second_suffix", strings.second_suffix);
         context.insert("providers.count", runtime.provider_count() as f64);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs_f64())
+            .unwrap_or(0.0);
+        context.insert("time.now.unix", now);
+        context.insert("time.now.milliseconds", now * 1000.0);
+        for (zone, local) in [("local", true), ("utc", false)] {
+            if let Some(value) = timestamp_parts(now, local) {
+                for (component, value) in [
+                    ("year", value.year),
+                    ("month", value.month),
+                    ("day", value.day),
+                    ("weekday", value.weekday),
+                    ("hour", value.hour),
+                    ("minute", value.minute),
+                    ("second", value.second),
+                ] {
+                    context.insert(&format!("time.{zone}.{component}"), f64::from(value));
+                }
+            }
+        }
         for descriptor in PROVIDER_DESCRIPTORS {
             context.insert(
                 &format!("providers.{}.enabled", descriptor.key),
                 runtime.provider_enabled(descriptor.id) as u8 as f64,
             );
         }
+        context.insert("display.countdown", runtime.countdown as u8 as f64);
         if let Some(data) = data {
             for descriptor in PROVIDER_DESCRIPTORS {
                 context.insert_provider(
                     descriptor.key,
                     data.get(descriptor.id),
                     descriptor.id == ProviderId::Codex,
+                    runtime.countdown,
                 );
             }
             let active = ProviderId::ALL
@@ -1322,12 +1373,18 @@ impl DataContext {
                 "active",
                 active.map(|(_, usage)| usage),
                 active.is_some_and(|(provider, _)| provider == ProviderId::Codex),
+                runtime.countdown,
             );
         } else {
             for descriptor in PROVIDER_DESCRIPTORS {
-                context.insert_provider(descriptor.key, None, descriptor.id == ProviderId::Codex);
+                context.insert_provider(
+                    descriptor.key,
+                    None,
+                    descriptor.id == ProviderId::Codex,
+                    runtime.countdown,
+                );
             }
-            context.insert_provider("active", None, false);
+            context.insert_provider("active", None, false, runtime.countdown);
         }
         context
     }
@@ -1337,7 +1394,18 @@ impl DataContext {
         name: &str,
         usage: Option<&crate::models::UsageData>,
         codex_compatibility: bool,
+        countdown: bool,
     ) {
+        // What a gauge or a badge should show. `percentage` stays the share
+        // that has been spent so warning thresholds keep working, while
+        // `display` follows the countdown setting.
+        let display = |percentage: f64| {
+            if countdown {
+                100.0 - percentage
+            } else {
+                percentage
+            }
+        };
         let weekly_label = usage
             .and_then(|usage| usage.weekly_label.as_deref())
             .or_else(|| self.get_string("i18n.weekly_window"))
@@ -1364,10 +1432,13 @@ impl DataContext {
         };
         self.insert(&format!("{name}.session.percentage"), session);
         self.insert(&format!("{name}.session.remaining"), 100.0 - session);
+        self.insert(&format!("{name}.session.display"), display(session));
         self.insert(&format!("{name}.five_hour.percentage"), five_hour);
         self.insert(&format!("{name}.five_hour.remaining"), 100.0 - five_hour);
+        self.insert(&format!("{name}.five_hour.display"), display(five_hour));
         self.insert(&format!("{name}.weekly.percentage"), weekly);
         self.insert(&format!("{name}.weekly.remaining"), 100.0 - weekly);
+        self.insert(&format!("{name}.weekly.display"), display(weekly));
         let monthly = usage.and_then(|usage| usage.monthly.as_ref());
         if let Some(monthly) = monthly {
             self.insert_string(&format!("{name}.monthly.label"), "30d");
@@ -1376,9 +1447,14 @@ impl DataContext {
                 &format!("{name}.monthly.remaining"),
                 100.0 - monthly.percentage,
             );
+            self.insert(
+                &format!("{name}.monthly.display"),
+                display(monthly.percentage),
+            );
         } else {
             self.insert(&format!("{name}.monthly.percentage"), 0.0);
             self.insert(&format!("{name}.monthly.remaining"), 100.0);
+            self.insert(&format!("{name}.monthly.display"), display(0.0));
         }
         self.insert(
             &format!("{name}.monthly.available"),
@@ -1399,6 +1475,10 @@ impl DataContext {
             &format!("{name}.credits.remaining"),
             100.0 - credits_percentage,
         );
+        self.insert(
+            &format!("{name}.credits.display"),
+            display(credits_percentage),
+        );
         // Currency, unlike the percentages either side of it.
         self.insert(
             &format!("{name}.credits.balance"),
@@ -1416,13 +1496,13 @@ impl DataContext {
         // limit. A provider can switch a window off entirely -- Codex has its
         // five-hour window disabled -- so binding a badge to one window alone
         // leaves it reporting 0% while another allowance is spent.
-        self.insert(
-            &format!("{name}.headline.percentage"),
-            match credits {
-                Some(credits) => credits.percentage,
-                None => five_hour.max(weekly),
-            },
-        );
+        let headline = match credits {
+            Some(credits) => credits.percentage,
+            None => five_hour.max(weekly),
+        };
+        self.insert(&format!("{name}.headline.percentage"), headline);
+        self.insert(&format!("{name}.headline.remaining"), 100.0 - headline);
+        self.insert(&format!("{name}.headline.display"), display(headline));
         let reset_value = |reset: Option<std::time::SystemTime>| {
             let unix = reset
                 .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1482,6 +1562,11 @@ impl DataContext {
         self.insert("object.y", object.y);
         self.insert("object.width", object.width);
         self.insert("object.height", object.height);
+        self.insert("this.x", object.x);
+        self.insert("this.y", object.y);
+        self.insert("this.width", object.width);
+        self.insert("this.height", object.height);
+        self.insert("this.gap", object.gap);
         self.insert("parent.width", object.parent_width);
         self.insert("parent.height", object.parent_height);
         self
@@ -1596,6 +1681,7 @@ pub fn validate_mouse_action_script(
         let (target, property, value) = match action {
             MouseAction::ShowDashboard
             | MouseAction::ToggleDashboard
+            | MouseAction::OpenUrl { .. }
             | MouseAction::ShowContextMenu { .. } => continue,
             MouseAction::Set {
                 target,
@@ -1801,6 +1887,7 @@ pub fn execute_mouse_actions(
         match action {
             MouseAction::ShowDashboard => effects.push(MouseActionEffect::ShowDashboard),
             MouseAction::ToggleDashboard => effects.push(MouseActionEffect::ToggleDashboard),
+            MouseAction::OpenUrl { url } => effects.push(MouseActionEffect::OpenUrl(url)),
             MouseAction::ShowContextMenu { menu } => {
                 effects.push(MouseActionEffect::ShowContextMenu(menu))
             }
@@ -1883,6 +1970,16 @@ pub fn execute_mouse_actions(
 }
 
 impl ThemeDocument {
+    /// How often a live clock can visibly change. Minute-only clocks avoid the
+    /// much more expensive second-by-second surface rendering path.
+    pub fn current_time_refresh_interval(&self) -> Option<Duration> {
+        current_time_refresh_interval_for(self)
+    }
+
+    pub fn surface_current_time_refresh_interval(&self, surface_index: usize) -> Option<Duration> {
+        current_time_refresh_interval_for(self.surfaces.get(surface_index)?)
+    }
+
     pub fn is_builtin(&self) -> bool {
         is_builtin_theme_id(&self.id)
     }
@@ -2065,6 +2162,68 @@ impl ThemeDocument {
     }
 }
 
+fn current_time_refresh_interval_for(value: &impl Serialize) -> Option<Duration> {
+    let source = serde_json::to_string(value).ok()?.to_ascii_lowercase();
+    let uses_clock =
+        source.contains("time.now") || source.contains("time.local") || source.contains("time.utc");
+    if !uses_clock {
+        return None;
+    }
+
+    let needs_seconds = source.contains("time.now.milliseconds")
+        || source.contains("time.local.second")
+        || source.contains("time.utc.second")
+        || unix_clock_requires_second_refresh(&source);
+    Some(Duration::from_secs(if needs_seconds { 1 } else { 60 }))
+}
+
+fn unix_clock_requires_second_refresh(source: &str) -> bool {
+    let mut remaining = source;
+    while let Some(index) = remaining.find("time.now.unix") {
+        let after_clock = &remaining[index + "time.now.unix".len()..];
+        let Some(token_end) = after_clock.find('}') else {
+            return true;
+        };
+        let token_tail = &after_clock[..token_end];
+        let Some((_, format)) = token_tail.rsplit_once(':') else {
+            return true;
+        };
+        if !is_minute_or_slower_clock_format(format) {
+            return true;
+        }
+        remaining = &after_clock[token_end + 1..];
+    }
+    false
+}
+
+fn is_minute_or_slower_clock_format(format: &str) -> bool {
+    let format = format.trim().strip_prefix("utc_").unwrap_or(format.trim());
+    matches!(
+        format,
+        "weekday_2"
+            | "weekday_short"
+            | "weekday_long"
+            | "day"
+            | "day_2"
+            | "month"
+            | "month_2"
+            | "month_short"
+            | "month_long"
+            | "year_2"
+            | "year"
+            | "date"
+            | "date_short"
+            | "date_long"
+            | "time"
+            | "time_short"
+            | "time_24"
+            | "time_12"
+            | "am_pm"
+            | "datetime_short"
+            | "iso_date"
+    )
+}
+
 fn validate_scene_mouse_events(
     errors: &mut Vec<String>,
     context: &DataContext,
@@ -2093,6 +2252,13 @@ fn validate_scene_mouse_events(
 }
 
 fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object: &SceneObject) {
+    let mut object_context = context.clone();
+    let gap = evaluate(&object.gap.0, context)
+        .ok()
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0)
+        .max(0.0);
+    object_context.insert("this.gap", gap);
     for (property, expression) in [
         ("render", &object.render),
         ("visibility", &object.visibility),
@@ -2106,7 +2272,11 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
     ] {
         validate_expression(
             errors,
-            context,
+            if property == "gap" {
+                context
+            } else {
+                &object_context
+            },
             &format!("{}.{}", object.name, property),
             expression,
         );
@@ -2115,26 +2285,26 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
         LayerBackground::None => {}
         LayerBackground::Colour { colour } => validate_paint(
             errors,
-            context,
+            &object_context,
             &format!("{}.background.colour", object.name),
             colour,
         ),
         LayerBackground::Gradient { start, end, angle } => {
             validate_paint(
                 errors,
-                context,
+                &object_context,
                 &format!("{}.background.gradient.start", object.name),
                 start,
             );
             validate_paint(
                 errors,
-                context,
+                &object_context,
                 &format!("{}.background.gradient.end", object.name),
                 end,
             );
             validate_expression(
                 errors,
-                context,
+                &object_context,
                 &format!("{}.background.gradient.angle", object.name),
                 angle,
             );
@@ -2148,13 +2318,13 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
     if let Some(border) = &object.border {
         validate_paint(
             errors,
-            context,
+            &object_context,
             &format!("{}.border", object.name),
             &border.color,
         );
         validate_expression(
             errors,
-            context,
+            &object_context,
             &format!("{}.border.width", object.name),
             &border.width,
         );
@@ -2170,18 +2340,23 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
         } => {
             validate_expression(
                 errors,
-                context,
+                &object_context,
                 &format!("{}.font_size", object.name),
                 font_size,
             );
             validate_expression(
                 errors,
-                context,
+                &object_context,
                 &format!("{}.contrast", object.name),
                 contrast,
             );
-            validate_paint(errors, context, &format!("{}.color", object.name), color);
-            for error in validate_template(template, context) {
+            validate_paint(
+                errors,
+                &object_context,
+                &format!("{}.color", object.name),
+                color,
+            );
+            for error in validate_template(template, &object_context) {
                 errors.push(format!("{}.template: {error}", object.name));
             }
         }
@@ -2201,7 +2376,7 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
             ] {
                 validate_expression(
                     errors,
-                    context,
+                    &object_context,
                     &format!("{}.{}", object.name, name),
                     expression,
                 );
@@ -2209,13 +2384,23 @@ fn validate_scene_object(errors: &mut Vec<String>, context: &DataContext, object
             if let Some(expression) = segments_expression {
                 validate_expression(
                     errors,
-                    context,
+                    &object_context,
                     &format!("{}.segments", object.name),
                     expression,
                 );
             }
-            validate_paint(errors, context, &format!("{}.fill", object.name), fill);
-            validate_paint(errors, context, &format!("{}.track", object.name), track);
+            validate_paint(
+                errors,
+                &object_context,
+                &format!("{}.fill", object.name),
+                fill,
+            );
+            validate_paint(
+                errors,
+                &object_context,
+                &format!("{}.track", object.name),
+                track,
+            );
         }
     }
 }
@@ -2255,7 +2440,7 @@ pub fn validate_template(template: &str, context: &DataContext) -> Vec<String> {
             break;
         };
         let token = &remaining[..end];
-        let (expression, format) = token.rsplit_once(':').unwrap_or((token, "0.##"));
+        let (expression, format) = split_template_token(token);
         let expression = expression.trim();
         let format = format.trim();
         if context.get_string(expression).is_some()
@@ -2267,7 +2452,7 @@ pub fn validate_template(template: &str, context: &DataContext) -> Vec<String> {
             remaining = &remaining[end + 1..];
             continue;
         }
-        if let Err(error) = evaluate(expression, context) {
+        if let Err(error) = evaluate_value(expression, context) {
             errors.push(error);
         }
         remaining = &remaining[end + 1..];
@@ -2338,6 +2523,9 @@ pub use theme_rendering::*;
 
 mod theme_expression;
 pub use theme_expression::*;
+
+mod theme_datetime;
+use theme_datetime::*;
 fn schema_version() -> u32 {
     THEME_SCHEMA_VERSION
 }

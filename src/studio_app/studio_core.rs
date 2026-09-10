@@ -1,5 +1,14 @@
 use super::*;
 
+fn clock_refresh_delay(interval: Duration) -> Duration {
+    let interval_ms = interval.as_millis().max(1);
+    let elapsed_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    Duration::from_millis((interval_ms - elapsed_ms % interval_ms) as u64)
+}
+
 impl StudioApp {
     pub(super) fn language(&self) -> LanguageId {
         localization::resolve_language(
@@ -19,10 +28,15 @@ impl StudioApp {
         ThemeRuntime::from_providers(self.settings.enabled_providers())
             .with_poll_state(self.usage_poll_ok, self.usage_has_error)
             .with_language(language)
+            .with_countdown(self.settings.usage_countdown)
     }
 
     pub(super) fn theme_runtime_for_surface(&self, surface_index: usize) -> ThemeRuntime {
-        crate::window::theme_runtime_for_surface(&self.theme, surface_index, self.theme_runtime())
+        crate::window::query_theme_runtime_for_surface(
+            &self.theme,
+            surface_index,
+            self.theme_runtime(),
+        )
     }
 
     pub(super) fn selected_theme_runtime(&self) -> ThemeRuntime {
@@ -41,6 +55,7 @@ impl StudioApp {
         let language = localization::resolve_language(
             settings.language.as_deref().and_then(LanguageId::from_code),
         );
+        egui_extras::install_image_loaders(&context.egui_ctx);
         configure_style(&context.egui_ctx, language);
         style_native_titlebar(context);
         let classic_theme_path = theme_engine::ensure_starter_theme().ok();
@@ -72,6 +87,9 @@ impl StudioApp {
         let usage = usage_cache.map(|cache| cache.data);
         let next_preview_countdown_refresh = preview_countdown_refresh_delay(usage.as_ref())
             .and_then(|delay| Instant::now().checked_add(delay));
+        let next_preview_clock_refresh = theme
+            .current_time_refresh_interval()
+            .and_then(|interval| Instant::now().checked_add(clock_refresh_delay(interval)));
         Self {
             owner,
             page: initial_page,
@@ -90,6 +108,7 @@ impl StudioApp {
             usage_has_error,
             last_cache_read: Instant::now(),
             next_preview_countdown_refresh,
+            next_preview_clock_refresh,
             dirty: false,
             live_apply: DEFAULT_LIVE_APPLY,
             zoom: 1.0,
@@ -131,7 +150,7 @@ impl StudioApp {
         if self.owner != 0 {
             unsafe {
                 let _ = PostMessageW(
-                    HWND(self.owner as *mut _),
+                    Some(HWND(self.owner as *mut _)),
                     WM_APP_SETTINGS_UPDATED,
                     WPARAM(0),
                     LPARAM(0),
@@ -143,7 +162,12 @@ impl StudioApp {
     pub(super) fn post_owner(&self, message: u32) {
         if self.owner != 0 {
             unsafe {
-                let _ = PostMessageW(HWND(self.owner as *mut _), message, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(
+                    Some(HWND(self.owner as *mut _)),
+                    message,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
             }
         }
     }
@@ -747,15 +771,29 @@ impl StudioApp {
         let countdown_due = self
             .next_preview_countdown_refresh
             .is_some_and(|deadline| now >= deadline);
-        if usage_changed || countdown_due {
+        let clock_interval = self.theme.current_time_refresh_interval();
+        let clock_due = clock_interval.is_some()
+            && self
+                .next_preview_clock_refresh
+                .is_none_or(|deadline| now >= deadline);
+        if usage_changed || countdown_due || clock_due {
             self.preview_dirty = true;
             self.next_preview_countdown_refresh =
                 preview_countdown_refresh_delay(self.usage.as_ref())
                     .and_then(|delay| now.checked_add(delay));
         }
+        if clock_interval.is_none() {
+            self.next_preview_clock_refresh = None;
+        } else if clock_due {
+            self.next_preview_clock_refresh = clock_interval
+                .map(clock_refresh_delay)
+                .and_then(|delay| now.checked_add(delay));
+        }
     }
 
     pub(super) fn shell(&mut self, ui: &mut egui::Ui) {
+        const GITHUB_URL: &str = "https://github.com/trelowney/claude-code-usage-monitor";
+
         let language = self.language();
         let full_height = ui.available_height();
         ui.horizontal(|ui| {
@@ -794,6 +832,13 @@ impl StudioApp {
                                 language.text("Context Menus"),
                             );
                             nav(ui, &mut self.page, Page::Assets, language.text("Assets"));
+                            ui.allocate_ui_with_layout(
+                                ui.available_size(),
+                                egui::Layout::bottom_up(egui::Align::Min),
+                                |ui| {
+                                    crate::ui::components::navigation::github_link(ui, GITHUB_URL);
+                                },
+                            );
                         });
                 },
             );

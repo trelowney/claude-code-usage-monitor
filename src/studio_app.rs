@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use lucide_icons::Icon as LucideIcon;
@@ -352,6 +352,7 @@ struct ActionHelperState {
     target: String,
     property: MouseActionProperty,
     value: String,
+    url: String,
     context_menu_reference: String,
 }
 
@@ -364,6 +365,7 @@ impl ActionHelperState {
             target: "self".into(),
             property: MouseActionProperty::Render,
             value: "false".into(),
+            url: "https://".into(),
             context_menu_reference: context_menu::CLASSIC_CONTEXT_MENU_ID.into(),
         }
     }
@@ -656,6 +658,7 @@ struct StudioApp {
     usage_has_error: bool,
     last_cache_read: Instant,
     next_preview_countdown_refresh: Option<Instant>,
+    next_preview_clock_refresh: Option<Instant>,
     dirty: bool,
     live_apply: bool,
     zoom: f32,
@@ -870,16 +873,16 @@ fn style_native_titlebar(context: &eframe::CreationContext<'_>) {
             let _ = SendMessageW(
                 hwnd,
                 WM_SETICON,
-                WPARAM(ICON_BIG as usize),
-                LPARAM(large_icon.0 as isize),
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(large_icon.0 as isize)),
             );
         }
         if !small_icon.is_invalid() {
             let _ = SendMessageW(
                 hwnd,
                 WM_SETICON,
-                WPARAM(ICON_SMALL as usize),
-                LPARAM(small_icon.0 as isize),
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small_icon.0 as isize)),
             );
         }
         for (attribute, color) in [

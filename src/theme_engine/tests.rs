@@ -208,6 +208,8 @@ fn text_mask_preserves_solid_pixels_and_reduces_antialiased_edges() {
 fn expressions_support_data_math_and_functions() {
     let mut context = DataContext::default();
     context.insert("claude.session.percentage", 73.4);
+    context.insert("this.gap", 4.0);
+    context.insert("parent.width", 320.0);
     assert_eq!(
         evaluate("clamp(claude.session.percentage * 2, 0, 100)", &context).unwrap(),
         100.0
@@ -222,9 +224,49 @@ fn expressions_support_data_math_and_functions() {
         1.0
     );
     assert_eq!(evaluate("lerp(10, 20, 0.25)", &context).unwrap(), 12.5);
+    assert_eq!(evaluate("get(this, gap)", &context).unwrap(), 4.0);
+    assert_eq!(evaluate("get(this.gap)", &context).unwrap(), 4.0);
+    assert_eq!(evaluate("get(self, gap)", &context).unwrap(), 4.0);
+    assert_eq!(evaluate("get(parent, width)", &context).unwrap(), 320.0);
+    assert!(evaluate("get(this, missing)", &context)
+        .unwrap_err()
+        .contains("this.missing"));
     let context = DataContext::from_usage(None, &Canvas::default());
     assert_eq!(evaluate("true", &context).unwrap(), 1.0);
     assert_eq!(evaluate("false", &context).unwrap(), 0.0);
+}
+
+#[test]
+fn layer_width_can_get_its_own_resolved_gap() {
+    let mut theme = ThemeDocument::starter();
+    let surface = &mut theme.surfaces[0];
+    let mut row = SceneObject::object("days", "Days");
+    row.gap = 4.0.into();
+    row.width = Expression("8 * 24 + 7 * get(this, gap)".into());
+    row.height = 24.0.into();
+    surface.children = vec![row];
+
+    assert!(theme.validate().is_empty(), "{:?}", theme.validate());
+    let (width, height) = resolve_surface_size(&theme, 0, None, ThemeRuntime::default());
+    let surface = &theme.surfaces[0];
+    let canvas = Canvas {
+        width,
+        width_expression: Some(surface.width.clone()),
+        height,
+        height_expression: Some(surface.height.clone()),
+        background: surface.background.canvas_paint(),
+    };
+    let (layers, warnings) = resolve_objects_for(
+        surface,
+        &canvas,
+        &surface.children,
+        None,
+        ThemeRuntime::default(),
+    );
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(layers[0].width, 220.0);
+    assert_eq!(layers[0].gap, 4.0);
 }
 
 #[test]
@@ -250,6 +292,162 @@ fn templates_apply_numeric_character_formats() {
         "Used 73.5%"
     );
     assert_eq!(format_template("{reset:duration_short}", &context), "4d");
+}
+
+#[test]
+fn text_templates_allow_if_to_return_quoted_strings() {
+    let mut context = DataContext::default();
+    context.insert("weekday", 1.0);
+    assert_eq!(
+        format_template(
+            r#"{if(weekday == 0, "Mo", if(weekday == 1, "Tu", "We"))}"#,
+            &context,
+        ),
+        "Tu"
+    );
+    assert_eq!(
+        format_template(r#"{if("Mo" == "Mo", 'Monday', 'Other')}"#, &context),
+        "Monday"
+    );
+    assert_eq!(
+        format_template(r#"{if(weekday == 1, "Day: 1", "Day: 2")}"#, &context,),
+        "Day: 1"
+    );
+    assert!(validate_template(
+        r#"{if(weekday == 0, "Mo", if(weekday == 1, "Tu", "We"))}"#,
+        &context,
+    )
+    .is_empty());
+}
+
+#[test]
+fn text_templates_can_select_weekdays_from_a_reset_epoch() {
+    let mut context = DataContext::default();
+    // Seven days before this reset is Monday, 5 January 1970 in UTC+10.
+    context.insert("codex.weekly.reset.unix", 950_400.0);
+    let day = "(floor((codex.weekly.reset.unix - 604800 + 36000) / 86400) + 3) % 7";
+    let template = format!(
+        "{{if({day} == 0, \"Mo\", if({day} == 1, \"Tu\", if({day} == 2, \"We\", if({day} == 3, \"Th\", if({day} == 4, \"Fr\", if({day} == 5, \"Sa\", \"Su\"))))))}}"
+    );
+    assert_eq!(format_template(&template, &context), "Mo");
+}
+
+#[test]
+fn timestamps_support_localized_and_iso_date_time_formats() {
+    let mut context = DataContext::default();
+    context.insert_string("i18n.locale", "en-US");
+    // Monday, 5 January 1970 at 13:04:09 UTC.
+    context.insert("timestamp", 392_649.0);
+    assert_eq!(format_template("{timestamp:utc_weekday_2}", &context), "Mo");
+    assert_eq!(
+        format_template("{timestamp:utc_weekday_short}", &context),
+        "Mon"
+    );
+    assert_eq!(
+        format_template("{timestamp:utc_month_long}", &context),
+        "January"
+    );
+    assert_eq!(
+        format_template("{timestamp:utc_iso_datetime}", &context),
+        "1970-01-05T13:04:09Z"
+    );
+    assert_eq!(
+        format_template("{timestamp:utc_time_24}", &context),
+        "13:04"
+    );
+    for format in [
+        "weekday_2",
+        "weekday_short",
+        "weekday_long",
+        "day",
+        "day_2",
+        "month",
+        "month_2",
+        "month_short",
+        "month_long",
+        "year_2",
+        "year",
+        "date_short",
+        "date_long",
+        "time_short",
+        "time_seconds",
+        "time_24",
+        "time_24_seconds",
+        "time_12",
+        "time_12_seconds",
+        "am_pm",
+        "datetime_short",
+        "datetime_long",
+        "iso_date",
+        "iso_time",
+        "iso_datetime",
+    ] {
+        let template = format!("{{timestamp:utc_{format}}}");
+        let rendered = format_template(&template, &context);
+        assert!(!rendered.is_empty() && rendered != "--", "{format}");
+    }
+}
+
+#[test]
+fn current_time_components_are_available_to_expressions() {
+    let context = DataContext::from_usage(None, &Canvas::default());
+    assert!(context.get("time.now.unix").unwrap_or(0.0) > 1_700_000_000.0);
+    assert!(matches!(context.get("time.local.weekday"), Some(0.0..=6.0)));
+    assert!(matches!(context.get("time.local.hour"), Some(0.0..=23.0)));
+    assert!(matches!(context.get("time.utc.month"), Some(1.0..=12.0)));
+}
+
+#[test]
+fn themes_report_when_they_need_live_clock_refreshes() {
+    let mut theme = ThemeDocument::starter();
+    assert_eq!(theme.current_time_refresh_interval(), None);
+    theme.surfaces[0].content = SceneContent::Text {
+        template: "{time.now.unix:time_24}".into(),
+        font_family: default_font_family(),
+        font_size: default_font_size(),
+        weight: FontWeight::default(),
+        rendering: FontRendering::default(),
+        contrast: default_font_contrast(),
+        align: TextAlign::default(),
+        color: default_text_paint(),
+    };
+    assert_eq!(
+        theme.current_time_refresh_interval(),
+        Some(std::time::Duration::from_secs(60))
+    );
+
+    let set_template = |theme: &mut ThemeDocument, value: &str| {
+        let SceneContent::Text { template, .. } = &mut theme.surfaces[0].content else {
+            unreachable!();
+        };
+        *template = value.into();
+    };
+    set_template(&mut theme, "{time.now.unix:time_24_seconds}");
+    assert_eq!(
+        theme.current_time_refresh_interval(),
+        Some(std::time::Duration::from_secs(1))
+    );
+
+    set_template(&mut theme, "{time.local.minute:0}");
+    assert_eq!(
+        theme.current_time_refresh_interval(),
+        Some(std::time::Duration::from_secs(60))
+    );
+
+    set_template(&mut theme, "{time.utc.second:0}");
+    assert_eq!(
+        theme.current_time_refresh_interval(),
+        Some(std::time::Duration::from_secs(1))
+    );
+}
+
+#[test]
+fn numeric_expressions_reject_string_results() {
+    let context = DataContext::from_usage(None, &Canvas::default());
+    assert_eq!(
+        evaluate(r#"if(true, "Mo", "Tu")"#, &context).unwrap_err(),
+        "Expected a number, found text"
+    );
 }
 
 #[test]
@@ -1232,19 +1430,19 @@ fn unsupported_theme_schemas_are_rejected_instead_of_migrated() {
 #[test]
 fn mouse_action_parser_preserves_nested_value_expressions() {
     let actions = parse_mouse_actions(
-        "show_dashboard(); toggle_dashboard(); show_context_menu()\n\
+        "show_dashboard(); toggle_dashboard(); open_url(\"https://example.com/usage\"); show_context_menu()\n\
              set(\"details\", height, max(40, parent.height / 2))\n\
              increase(self.width, 10)\ndecrease(\"details\", rotation, 5)\n\
              toggle(self.render)\nreset(\"details\", width)",
     )
     .unwrap();
-    assert_eq!(actions.len(), 8);
+    assert_eq!(actions.len(), 9);
     assert!(matches!(
-        &actions[3],
+        &actions[4],
         MouseAction::Set { value, .. } if value.0 == "max(40, parent.height / 2)"
     ));
-    assert!(matches!(actions[4], MouseAction::Increase { .. }));
-    assert!(matches!(actions[5], MouseAction::Decrease { .. }));
+    assert!(matches!(actions[5], MouseAction::Increase { .. }));
+    assert!(matches!(actions[6], MouseAction::Decrease { .. }));
     assert!(parse_mouse_actions("increase(self.render, 1)")
         .unwrap_err()
         .contains("numeric property"));
@@ -1254,6 +1452,15 @@ fn mouse_action_parser_preserves_nested_value_expressions() {
             .as_slice(),
         [MouseAction::ShowContextMenu { menu: Some(menu) }] if menu == "My Menu"
     ));
+    assert!(matches!(
+        parse_mouse_actions("open_url(\"https://example.com/usage\")")
+            .unwrap()
+            .as_slice(),
+        [MouseAction::OpenUrl { url }] if url == "https://example.com/usage"
+    ));
+    assert!(parse_mouse_actions("open_url(\"file:///temp\")")
+        .unwrap_err()
+        .contains("http:// or https://"));
 }
 
 #[test]
@@ -1359,7 +1566,7 @@ fn dashboard_and_context_menu_actions_emit_ordered_effects() {
         &theme,
         0,
         &self_id,
-        "show_dashboard(); toggle_dashboard(); show_context_menu()",
+        "show_dashboard(); toggle_dashboard(); open_url(\"https://example.com/usage\"); show_context_menu()",
         None,
         ThemeRuntime::default(),
         &mut HashMap::new(),
@@ -1370,6 +1577,7 @@ fn dashboard_and_context_menu_actions_emit_ordered_effects() {
         vec![
             MouseActionEffect::ShowDashboard,
             MouseActionEffect::ToggleDashboard,
+            MouseActionEffect::OpenUrl("https://example.com/usage".into()),
             MouseActionEffect::ShowContextMenu(None),
         ]
     );
@@ -1545,4 +1753,227 @@ fn credit_badges_abbreviate_a_balance_too_wide_for_the_tray() {
         format_template("{codex.credits.balance / 1000:0.0}k", &context(1234.0)),
         "1.2k"
     );
+}
+
+#[test]
+fn countdown_display_values_invert_usage_without_moving_the_thresholds() {
+    use crate::models::{CreditsSection, UsageData, UsageSection};
+
+    let usage = AppUsageData::from_iter([(
+        ProviderId::Claude,
+        UsageData {
+            session: UsageSection {
+                percentage: 25.0,
+                resets_at: None,
+            },
+            weekly: UsageSection {
+                percentage: 60.0,
+                resets_at: None,
+            },
+            credits: Some(CreditsSection {
+                percentage: 40.0,
+                remaining: 24.1,
+                total: 40.83,
+            }),
+            ..Default::default()
+        },
+    )]);
+    let canvas = Canvas::default();
+    let context = |countdown: bool| {
+        DataContext::from_usage_with_runtime(
+            Some(&usage),
+            &canvas,
+            ThemeRuntime::default().with_countdown(countdown),
+        )
+    };
+
+    let counting_up = context(false);
+    assert_eq!(counting_up.get("display.countdown"), Some(0.0));
+    assert_eq!(counting_up.get("claude.session.display"), Some(25.0));
+    assert_eq!(counting_up.get("claude.weekly.display"), Some(60.0));
+    assert_eq!(counting_up.get("claude.credits.display"), Some(40.0));
+    assert_eq!(counting_up.get("claude.headline.display"), Some(40.0));
+    assert_eq!(
+        format_template("{claude.session:usage_line}", &counting_up),
+        "25%"
+    );
+
+    let counting_down = context(true);
+    assert_eq!(counting_down.get("display.countdown"), Some(1.0));
+    assert_eq!(counting_down.get("claude.session.display"), Some(75.0));
+    assert_eq!(counting_down.get("claude.weekly.display"), Some(40.0));
+    assert_eq!(counting_down.get("claude.credits.display"), Some(60.0));
+    assert_eq!(counting_down.get("claude.headline.display"), Some(60.0));
+    assert_eq!(
+        format_template("{claude.session.display:usage_line}", &counting_down),
+        "75%"
+    );
+
+    // Severity is what a theme colours by, so the spent share never flips.
+    for context in [counting_up, counting_down] {
+        assert_eq!(
+            format_template("{claude.session:usage_line}", &context),
+            "25%"
+        );
+        assert_eq!(
+            format_template("{claude.session:usage_badge}", &context),
+            "25%"
+        );
+        assert_eq!(context.get("claude.session.percentage"), Some(25.0));
+        assert_eq!(context.get("claude.session.remaining"), Some(75.0));
+        assert_eq!(context.get("claude.weekly.percentage"), Some(60.0));
+        assert_eq!(context.get("claude.headline.percentage"), Some(40.0));
+        assert_eq!(context.get("claude.headline.remaining"), Some(60.0));
+    }
+}
+
+#[test]
+fn classic_usage_direction_defaults_to_used_until_enabled() {
+    use crate::app_settings::SettingsFile;
+    use crate::models::{UsageData, UsageSection};
+
+    let theme = ThemeDocument::starter();
+    let gauge = theme.surfaces[0]
+        .children
+        .iter()
+        .find(|object| object.id == "claude-session-segments-dark")
+        .unwrap();
+    let label = theme.surfaces[0]
+        .children
+        .iter()
+        .find(|object| object.id == "claude-session-value-dark")
+        .unwrap();
+    let SceneContent::Progress { value, .. } = &gauge.content else {
+        panic!("expected gauge")
+    };
+    let SceneContent::Text { template, .. } = &label.content else {
+        panic!("expected label")
+    };
+    let settings = SettingsFile::default();
+    assert!(!settings.usage_countdown);
+    let usage = AppUsageData::from_iter([(
+        ProviderId::Claude,
+        UsageData {
+            session: UsageSection {
+                percentage: 25.0,
+                resets_at: None,
+            },
+            ..Default::default()
+        },
+    )]);
+    for (countdown, expected, text) in
+        [(settings.usage_countdown, 25.0, "25%"), (true, 75.0, "75%")]
+    {
+        let context = DataContext::from_usage_with_runtime(
+            Some(&usage),
+            &Canvas::default(),
+            ThemeRuntime::default().with_countdown(countdown),
+        );
+        assert_eq!(evaluate(&value.0, &context).unwrap(), expected);
+        assert_eq!(format_template(template, &context), text);
+    }
+}
+
+#[test]
+fn display_summaries_preserve_status_reset_formatting_and_legacy_tokens() {
+    let mut context = DataContext::from_usage(None, &Canvas::default());
+    context.insert("data.loading", 0.0);
+    context.insert("data.poll_ok", 1.0);
+    context.insert("claude.available", 1.0);
+    context.insert("claude.session.percentage", 25.0);
+    context.insert("claude.session.display", 75.0);
+    context.insert("claude.session.reset.unix", 1.0);
+    context.insert("claude.session.reset.seconds", 3_600.0);
+
+    // Explicit and legacy summaries can coexist in the same theme.
+    let template = "{claude.session:usage_line} / {claude.session.display:usage_line}";
+    assert!(validate_template(template, &context).is_empty());
+    assert_eq!(format_template(template, &context), "25% · 1h / 75% · 1h");
+    assert_eq!(
+        format_template("{claude.session.display:usage_badge}", &context),
+        "75%"
+    );
+
+    for format in ["usage_line", "usage_badge"] {
+        let token = format!("{{claude.session.display:{format}}}");
+        context.insert("data.loading", 1.0);
+        assert_eq!(format_template(&token, &context), "--");
+        context.insert("data.loading", 0.0);
+        context.insert("data.has_error", 1.0);
+        assert_eq!(format_template(&token, &context), "!");
+        context.insert("data.has_error", 0.0);
+        context.insert("claude.available", 0.0);
+        assert_eq!(format_template(&token, &context), "!");
+        context.insert("claude.available", 1.0);
+        assert_eq!(
+            format_template(&token, &context),
+            if format == "usage_line" {
+                "75% · 1h"
+            } else {
+                "75%"
+            }
+        );
+    }
+    for invalid in [
+        "claude.session.display.extra",
+        "claude.session.unknown",
+        "claude.headline.display",
+    ] {
+        assert!(format_usage_line(invalid, &context).is_none());
+    }
+}
+
+#[test]
+fn the_classic_theme_shows_one_badge_digit_group_in_both_usage_directions() {
+    use crate::models::{UsageData, UsageSection};
+
+    let theme = ThemeDocument::starter();
+    let percent = |value: f64| UsageSection {
+        percentage: value,
+        resets_at: None,
+    };
+
+    for provider in ProviderId::ALL {
+        let surface_id = format!("{}-tray-icon", provider.descriptor().key);
+        let Some(surface) = theme
+            .surfaces
+            .iter()
+            .find(|surface| surface.id == surface_id)
+        else {
+            continue;
+        };
+        for spent in [0.0, 5.0, 42.0, 90.0, 95.0, 100.0] {
+            for countdown in [false, true] {
+                let usage = AppUsageData::from_iter([(
+                    provider,
+                    UsageData {
+                        session: percent(spent),
+                        weekly: percent(spent),
+                        ..Default::default()
+                    },
+                )]);
+                let context = DataContext::from_usage_with_runtime(
+                    Some(&usage),
+                    &Canvas::default(),
+                    ThemeRuntime::from_providers(ProviderSet::from_enabled([provider]))
+                        .with_countdown(countdown),
+                );
+                let badges: Vec<&str> = surface
+                    .children
+                    .iter()
+                    .filter(|object| {
+                        object.id.contains("digit")
+                            && !object.id.contains("credit")
+                            && evaluate(&object.render.0, &context).unwrap_or(0.0) != 0.0
+                    })
+                    .map(|object| object.id.as_str())
+                    .collect();
+                assert_eq!(
+                    badges.len(),
+                    1,
+                    "{surface_id} at {spent}% spent with countdown {countdown}: {badges:?}"
+                );
+            }
+        }
+    }
 }

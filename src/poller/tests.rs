@@ -15,6 +15,23 @@ fn usage_with_session_percent(percentage: f64) -> UsageData {
 }
 
 #[test]
+fn configured_https_transport_does_not_panic() {
+    let request = std::panic::catch_unwind(|| {
+        // Port 1 should refuse immediately; reaching the connector is enough to
+        // verify that the configured TLS provider was compiled into ureq.
+        let _ = build_agent()
+            .expect("HTTP agent should build")
+            .get("https://127.0.0.1:1")
+            .call();
+    });
+
+    assert!(
+        request.is_ok(),
+        "the configured HTTPS provider must be enabled in ureq"
+    );
+}
+
+#[test]
 fn stale_usage_does_not_trigger_reset_polling() {
     let mut usage = usage_with_session_percent(42.0);
     usage.session.resets_at = Some(UNIX_EPOCH);
@@ -344,4 +361,21 @@ fn a_disabled_provider_is_not_resurrected() {
     );
 
     assert!(merged.get(ProviderId::Claude).is_none());
+}
+
+#[test]
+fn all_failed_providers_can_carry_their_previous_readings() {
+    let previous: AppUsageData = [(ProviderId::Claude, usage_with_session_percent(21.0))]
+        .into_iter()
+        .collect();
+
+    let merged = carry_forward_failures(
+        AppUsageData::default(),
+        &previous,
+        ProviderSet::from_enabled([ProviderId::Claude]),
+    );
+
+    let claude = merged.get(ProviderId::Claude).expect("claude is kept");
+    assert_eq!(claude.session.percentage, 21.0);
+    assert!(claude.stale, "the carried reading must be marked stale");
 }

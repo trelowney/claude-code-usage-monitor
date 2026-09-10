@@ -117,6 +117,9 @@ pub(super) fn execute_mouse_action_source(
                 match effect {
                     MouseActionEffect::ShowDashboard => crate::dashboard::show(owner),
                     MouseActionEffect::ToggleDashboard => crate::dashboard::toggle(owner),
+                    MouseActionEffect::OpenUrl(url) => {
+                        open_web_url(owner, &url, "mouse action URL could not be opened")
+                    }
                     MouseActionEffect::ShowContextMenu(menu) => show_context_menu_document(
                         owner,
                         menu.as_deref(),
@@ -153,8 +156,13 @@ pub(super) fn schedule_or_dispatch_click(hwnd: HWND, surface_index: usize, objec
             state.hwnd.to_hwnd()
         };
         unsafe {
-            let _ = KillTimer(owner, TIMER_MOUSE_CLICK);
-            SetTimer(owner, TIMER_MOUSE_CLICK, GetDoubleClickTime().max(1), None);
+            let _ = KillTimer(Some(owner), TIMER_MOUSE_CLICK);
+            SetTimer(
+                Some(owner),
+                TIMER_MOUSE_CLICK,
+                GetDoubleClickTime().max(1),
+                None,
+            );
         }
     } else {
         let _ = dispatch_mouse_event(surface_index, &object_id, MouseEventKind::Click);
@@ -176,7 +184,7 @@ pub(super) fn dispatch_double_click(hwnd: HWND, surface_index: usize, object_id:
         state.hwnd.to_hwnd()
     };
     unsafe {
-        let _ = KillTimer(owner, TIMER_MOUSE_CLICK);
+        let _ = KillTimer(Some(owner), TIMER_MOUSE_CLICK);
     }
     let _ = dispatch_mouse_event(surface_index, &object_id, MouseEventKind::DoubleClick);
     let _ = hwnd;
@@ -247,7 +255,7 @@ pub(super) fn update_tray_mouse_hover(hwnd: HWND, surface_index: usize, object_i
         };
         if state.hovered_mouse_layer == target {
             unsafe {
-                SetTimer(hwnd, TIMER_TRAY_HOVER, 100, None);
+                SetTimer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
             }
             return;
         }
@@ -260,7 +268,7 @@ pub(super) fn update_tray_mouse_hover(hwnd: HWND, surface_index: usize, object_i
         let _ = dispatch_mouse_event(surface, &object, MouseEventKind::MouseEnter);
     }
     unsafe {
-        SetTimer(hwnd, TIMER_TRAY_HOVER, 100, None);
+        SetTimer(Some(hwnd), TIMER_TRAY_HOVER, 100, None);
     }
 }
 
@@ -285,7 +293,7 @@ pub(super) fn clear_tray_mouse_hover_if_left(hwnd: HWND) {
     };
     let Some((target, true)) = hovered else {
         unsafe {
-            let _ = KillTimer(hwnd, TIMER_TRAY_HOVER);
+            let _ = KillTimer(Some(hwnd), TIMER_TRAY_HOVER);
         }
         return;
     };
@@ -298,7 +306,7 @@ pub(super) fn clear_tray_mouse_hover_if_left(hwnd: HWND) {
             .flatten()
     });
     unsafe {
-        let _ = KillTimer(hwnd, TIMER_TRAY_HOVER);
+        let _ = KillTimer(Some(hwnd), TIMER_TRAY_HOVER);
     }
     if let Some((surface, object)) = previous {
         let _ = dispatch_mouse_event(surface, &object, MouseEventKind::MouseLeave);
@@ -311,7 +319,7 @@ pub(super) unsafe fn set_surface_cursor(hwnd: HWND) -> bool {
         return false;
     }
     let mut client = [point];
-    MapWindowPoints(HWND::default(), hwnd, &mut client);
+    MapWindowPoints(None, Some(hwnd), &mut client);
     let packed = ((client[0].y as u32 & 0xffff) << 16) | (client[0].x as u32 & 0xffff);
     let Some((surface, object)) = mouse_target_at(hwnd, LPARAM(packed as isize)) else {
         return false;
@@ -324,8 +332,8 @@ pub(super) unsafe fn set_surface_cursor(hwnd: HWND) -> bool {
     .into_iter()
     .any(|event| mouse_handler_exists(surface, &object, event));
     if clickable {
-        let cursor = LoadCursorW(HINSTANCE::default(), IDC_HAND).unwrap_or_default();
-        SetCursor(cursor);
+        let cursor = LoadCursorW(None, IDC_HAND).unwrap_or_default();
+        SetCursor(Some(cursor));
     }
     clickable
 }

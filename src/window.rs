@@ -29,9 +29,9 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::{AppUsageData, UsageSection};
 use crate::native_interop::{
-    self, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL, TIMER_TRAY_HOVER,
-    TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
-    WM_APP_SETTINGS_UPDATED, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
+    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL,
+    TIMER_TRAY_HOVER, TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT,
+    WM_APP_REFRESH_NOW, WM_APP_SETTINGS_UPDATED, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::providers::{ProviderId, ProviderSet};
@@ -96,8 +96,11 @@ struct AppState {
     drag_start_offset: i32,
 
     custom_theme_enabled: bool,
+    usage_countdown: bool,
     active_theme_path: Option<PathBuf>,
     active_theme: Option<ThemeDocument>,
+    theme_clock_interval: Option<Duration>,
+    tray_theme_uses_current_time: bool,
     mirror_hwnds: Vec<SendHwnd>,
     desktop_hwnds: Vec<Option<SendHwnd>>,
     mouse_action_overrides: HashMap<MouseActionOverrideKey, theme_engine::Expression>,
@@ -148,6 +151,27 @@ fn language_from_menu_command_id(command: u16) -> Option<LanguageId> {
     command
         .checked_sub(IDM_LANG_FIRST)
         .and_then(|index| LanguageId::from_index(index.into()))
+}
+
+fn open_web_url(hwnd: HWND, url: &str, failure_message: &'static str) {
+    if !context_menu::supported_url(url) {
+        return;
+    }
+    unsafe {
+        let operation = native_interop::wide_str("open");
+        let url = native_interop::wide_str(url.trim());
+        let result = ShellExecuteW(
+            Some(hwnd),
+            PCWSTR::from_raw(operation.as_ptr()),
+            PCWSTR::from_raw(url.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+        if result.0 as isize <= 32 {
+            diagnose::log(failure_message);
+        }
+    }
 }
 
 /// How often the watchdog thread polls for an explorer.exe restart (which
@@ -256,7 +280,8 @@ fn logical_host_dimension(physical: i32, scale: f64) -> u32 {
         .clamp(1.0, u32::MAX as f64) as u32
 }
 
-pub(crate) fn theme_runtime_for_surface(
+// The studio runs in a separate process without the monitor's layout cache.
+pub(crate) fn query_theme_runtime_for_surface(
     theme: &ThemeDocument,
     surface_index: usize,
     runtime: ThemeRuntime,
@@ -394,7 +419,7 @@ fn spawn_taskbar_watchdog() {
         }
         let invalid = windows
             .iter()
-            .any(|window| unsafe { !IsWindow(window.to_hwnd()).as_bool() });
+            .any(|window| unsafe { !IsWindow(Some(window.to_hwnd())).as_bool() });
         if invalid && !native_interop::find_taskbars().is_empty() {
             diagnose::log("watchdog: shell-hosted surface was destroyed -> relaunching");
             relaunch_self();
@@ -410,9 +435,33 @@ fn lock_state() -> MutexGuard<'static, Option<AppState>> {
 }
 
 fn theme_runtime_from_state(state: &AppState) -> ThemeRuntime {
+    let (poll_ok, has_error) = poll_display_state(
+        state.last_poll_ok,
+        state.retry_count,
+        state.auth_error_paused_polling,
+        state.data.as_ref(),
+    );
     ThemeRuntime::from_providers(state.providers)
-        .with_poll_state(state.last_poll_ok, state.retry_count > 0)
+        .with_poll_state(poll_ok, has_error)
         .with_language(state.language)
+        .with_countdown(state.usage_countdown)
+}
+
+/// A transient outage can keep presenting the last real reading while its
+/// retry runs. Authentication failures and failures without cached data still
+/// need the explicit error state.
+fn poll_display_state(
+    last_poll_ok: bool,
+    retry_count: u32,
+    auth_error_paused_polling: bool,
+    data: Option<&AppUsageData>,
+) -> (bool, bool) {
+    let has_usable_stale_data = !auth_error_paused_polling
+        && data.is_some_and(|data| data.iter().any(|(_, usage)| usage.stale));
+    (
+        last_poll_ok || has_usable_stale_data,
+        retry_count > 0 && !has_usable_stale_data,
+    )
 }
 
 fn effective_theme_from_state(state: &AppState) -> Option<ThemeDocument> {
@@ -444,9 +493,14 @@ fn sync_window_state_timer(hwnd: HWND) {
     };
     unsafe {
         if required {
-            SetTimer(hwnd, TIMER_WINDOW_STATE, WINDOW_STATE_INTERVAL_MS, None);
+            SetTimer(
+                Some(hwnd),
+                TIMER_WINDOW_STATE,
+                WINDOW_STATE_INTERVAL_MS,
+                None,
+            );
         } else {
-            let _ = KillTimer(hwnd, TIMER_WINDOW_STATE);
+            let _ = KillTimer(Some(hwnd), TIMER_WINDOW_STATE);
         }
     }
 }
@@ -485,7 +539,67 @@ fn save_settings_or_log(settings: &SettingsFile, context: &str) {
     }
 }
 
+fn tray_usage_summary_lines(
+    data: &AppUsageData,
+    providers: ProviderSet,
+    language: LanguageId,
+    countdown: bool,
+) -> Vec<String> {
+    let strings = language.strings();
+    let shown = |percentage: f64| {
+        if countdown {
+            100.0 - percentage
+        } else {
+            percentage
+        }
+    };
+    providers
+        .iter()
+        .filter_map(|provider| {
+            let usage = data.get(provider)?;
+            let descriptor = provider.descriptor();
+            let weekly_label = usage
+                .weekly_label
+                .as_deref()
+                .unwrap_or(strings.weekly_window);
+            Some(format!(
+                "{} {}: {:.0}% | {}: {:.0}%",
+                language.text(descriptor.display_name),
+                strings.session_window,
+                shown(usage.session.percentage),
+                weekly_label,
+                shown(usage.weekly.percentage),
+            ))
+        })
+        .collect()
+}
+
+fn tray_usage_summary_from_state() -> Option<String> {
+    let state = lock_state();
+    let state = state.as_ref()?;
+    if !state.last_poll_ok {
+        return None;
+    }
+    let lines = tray_usage_summary_lines(
+        state.data.as_ref()?,
+        state.providers,
+        state.language,
+        state.usage_countdown,
+    );
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn tray_icon_tooltip_from_state() -> String {
+    tray_usage_summary_from_state().unwrap_or_else(|| {
+        lock_state()
+            .as_ref()
+            .map(|state| state.language.strings().window_title.to_string())
+            .unwrap_or_else(|| "Claude Code Usage Monitor".to_string())
+    })
+}
+
 fn sync_tray_icon(hwnd: HWND) {
+    let usage_tooltip = tray_usage_summary_from_state();
     let themed = {
         let state = lock_state();
         state.as_ref().and_then(|state| {
@@ -552,7 +666,9 @@ fn sync_tray_icon(hwnd: HWND) {
                     );
                     Some(tray_icon::ThemedTrayIcon {
                         surface_index,
-                        tooltip: surface.name.clone(),
+                        tooltip: usage_tooltip
+                            .clone()
+                            .unwrap_or_else(|| surface.name.clone()),
                         width: rendered.width,
                         height: rendered.height,
                         pixels: rendered.pixels,
@@ -566,6 +682,25 @@ fn sync_tray_icon(hwnd: HWND) {
     // Unlike upstream, the active theme showing no tray-nested surface means no
     // tray icon at all — no unconditional fallback app icon + tooltip.
     tray_icon::remove_all(hwnd);
+}
+
+fn theme_tray_uses_current_time(theme: &ThemeDocument) -> bool {
+    theme
+        .surfaces
+        .iter()
+        .enumerate()
+        .filter(|(_, surface)| {
+            surface
+                .placement
+                .nest
+                .resolve(surface.placement.reference.region)
+                == SurfaceNest::TrayIcon
+        })
+        .any(|(surface_index, _)| {
+            theme
+                .surface_current_time_refresh_interval(surface_index)
+                .is_some()
+        })
 }
 
 fn taskbar_created_message() -> u32 {
@@ -695,9 +830,9 @@ fn schedule_auto_update_check(hwnd: HWND) {
     };
 
     unsafe {
-        let _ = KillTimer(hwnd, TIMER_UPDATE_CHECK);
+        let _ = KillTimer(Some(hwnd), TIMER_UPDATE_CHECK);
         if let Some(delay_ms) = delay_ms {
-            SetTimer(hwnd, TIMER_UPDATE_CHECK, delay_ms.max(1), None);
+            SetTimer(Some(hwnd), TIMER_UPDATE_CHECK, delay_ms.max(1), None);
         }
     }
 }
@@ -714,7 +849,7 @@ fn show_info_message(hwnd: HWND, title: &str, message: &str) {
         let title_wide = native_interop::wide_str(title);
         let message_wide = native_interop::wide_str(message);
         let _ = MessageBoxW(
-            hwnd,
+            Some(hwnd),
             PCWSTR::from_raw(message_wide.as_ptr()),
             PCWSTR::from_raw(title_wide.as_ptr()),
             MB_OK | MB_ICONINFORMATION,
@@ -727,7 +862,7 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
         let title_wide = native_interop::wide_str(title);
         let message_wide = native_interop::wide_str(message);
         let _ = MessageBoxW(
-            hwnd,
+            Some(hwnd),
             PCWSTR::from_raw(message_wide.as_ptr()),
             PCWSTR::from_raw(title_wide.as_ptr()),
             MB_OK | MB_ICONERROR,
@@ -744,7 +879,7 @@ fn show_update_prompt(hwnd: HWND, strings: Strings, release: &ReleaseDescriptor)
         let title_wide = native_interop::wide_str(strings.update_available);
         let message_wide = native_interop::wide_str(&message);
         MessageBoxW(
-            hwnd,
+            Some(hwnd),
             PCWSTR::from_raw(message_wide.as_ptr()),
             PCWSTR::from_raw(title_wide.as_ptr()),
             MB_YESNO | MB_ICONQUESTION,
@@ -820,7 +955,12 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     show_info_message(hwnd, strings.updates, strings.up_to_date);
                 }
                 unsafe {
-                    let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(
+                        Some(hwnd),
+                        WM_APP_UPDATE_CHECK_COMPLETE,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
                 }
             }
             Ok(UpdateCheckResult::Available(release)) => {
@@ -839,7 +979,12 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     }
                 }
                 unsafe {
-                    let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(
+                        Some(hwnd),
+                        WM_APP_UPDATE_CHECK_COMPLETE,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
                 }
             }
             Err(error) => {
@@ -856,7 +1001,12 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     show_error_message(hwnd, strings.updates, &message);
                 }
                 unsafe {
-                    let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(
+                        Some(hwnd),
+                        WM_APP_UPDATE_CHECK_COMPLETE,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
                 }
             }
         }
@@ -891,7 +1041,7 @@ fn begin_update_apply(hwnd: HWND, release: ReleaseDescriptor) {
         let hwnd = send_hwnd.to_hwnd();
         match updater::begin_self_update(&release) {
             Ok(()) => unsafe {
-                let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             },
             Err(error) => {
                 {
@@ -903,7 +1053,12 @@ fn begin_update_apply(hwnd: HWND, release: ReleaseDescriptor) {
                 let message = format!("{}.\n\n{}", strings.update_failed, error);
                 show_error_message(hwnd, strings.updates, &message);
                 unsafe {
-                    let _ = PostMessageW(hwnd, WM_APP_UPDATE_CHECK_COMPLETE, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(
+                        Some(hwnd),
+                        WM_APP_UPDATE_CHECK_COMPLETE,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
                 }
             }
         }
@@ -919,7 +1074,7 @@ fn begin_winget_update(hwnd: HWND) {
 
     match updater::begin_winget_update() {
         Ok(()) => unsafe {
-            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         },
         Err(error) => {
             let message = format!("{}.\n\n{}", strings.update_failed, error);
@@ -941,7 +1096,7 @@ pub(crate) fn is_startup_enabled() -> bool {
         let result = RegOpenKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR::from_raw(path.as_ptr()),
-            0,
+            None,
             KEY_READ,
             &mut hkey,
         );
@@ -1007,7 +1162,7 @@ pub(crate) fn set_startup_enabled(enable: bool) {
         let result = RegOpenKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR::from_raw(path.as_ptr()),
-            0,
+            None,
             KEY_SET_VALUE,
             &mut hkey,
         );
@@ -1026,7 +1181,7 @@ pub(crate) fn set_startup_enabled(enable: bool) {
                 let _ = RegSetValueExW(
                     hkey,
                     PCWSTR::from_raw(key_name.as_ptr()),
-                    0,
+                    None,
                     REG_SZ,
                     Some(std::slice::from_raw_parts(
                         exe_buf.as_ptr() as *const u8,
@@ -1065,6 +1220,8 @@ fn apply_custom_theme(
             .and_then(|state| state.active_theme.clone()),
     };
     let loaded = loaded.unwrap_or_else(ThemeDocument::starter);
+    let theme_clock_interval = loaded.current_time_refresh_interval();
+    let tray_theme_uses_current_time = theme_tray_uses_current_time(&loaded);
     {
         let mut state = lock_state();
         let Some(state) = state.as_mut() else {
@@ -1072,6 +1229,8 @@ fn apply_custom_theme(
         };
         state.custom_theme_enabled = true;
         state.active_theme = Some(loaded);
+        state.theme_clock_interval = theme_clock_interval;
+        state.tray_theme_uses_current_time = tray_theme_uses_current_time;
         state.mouse_action_overrides.clear();
         state.hovered_mouse_layer = None;
         state.pending_mouse_click = None;
@@ -1086,7 +1245,7 @@ fn apply_custom_theme(
         reset_layered_window(hwnd);
         let _ = SetWindowPos(
             hwnd,
-            HWND_NOTOPMOST,
+            Some(HWND_NOTOPMOST),
             0,
             0,
             0,
@@ -1096,6 +1255,8 @@ fn apply_custom_theme(
     }
     sync_custom_mirrors();
     sync_window_state_timer(hwnd);
+    schedule_countdown_timer();
+    schedule_clock_timer();
     Ok(())
 }
 
@@ -1171,7 +1332,7 @@ fn sync_custom_mirrors() {
         for (surface_index, window) in state.desktop_hwnds.iter_mut().enumerate() {
             let wanted = desktop_surfaces.get(surface_index) == Some(&true);
             let valid =
-                window.is_some_and(|window| unsafe { IsWindow(window.to_hwnd()).as_bool() });
+                window.is_some_and(|window| unsafe { IsWindow(Some(window.to_hwnd())).as_bool() });
             if !wanted || !valid {
                 if let Some(window) = window.take() {
                     stale.push(window);
@@ -1228,7 +1389,7 @@ unsafe fn create_desktop_surface_window() -> HWND {
         style: CS_DBLCLKS,
         lpfnWndProc: Some(mirror_wnd_proc),
         hInstance: HINSTANCE(instance.0),
-        hCursor: LoadCursorW(HINSTANCE::default(), IDC_ARROW).unwrap_or_default(),
+        hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
         hbrBackground: HBRUSH::default(),
         lpszClassName: PCWSTR::from_raw(class.as_ptr()),
         ..Default::default()
@@ -1247,9 +1408,9 @@ unsafe fn create_desktop_surface_window() -> HWND {
         0,
         198,
         144,
-        desktop.parent,
+        Some(desktop.parent),
         None,
-        instance,
+        Some(HINSTANCE(instance.0)),
         None,
     )
     .unwrap_or_default();
@@ -1269,7 +1430,7 @@ unsafe fn create_mirror_window() -> HWND {
         style: CS_DBLCLKS,
         lpfnWndProc: Some(mirror_wnd_proc),
         hInstance: HINSTANCE(instance.0),
-        hCursor: LoadCursorW(HINSTANCE::default(), IDC_ARROW).unwrap_or_default(),
+        hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
         hbrBackground: HBRUSH::default(),
         lpszClassName: PCWSTR::from_raw(class.as_ptr()),
         ..Default::default()
@@ -1285,9 +1446,9 @@ unsafe fn create_mirror_window() -> HWND {
         0,
         1,
         1,
-        HWND::default(),
-        HMENU::default(),
-        instance,
+        None,
+        None,
+        Some(HINSTANCE(instance.0)),
         None,
     )
     .unwrap_or_default()
@@ -1448,7 +1609,7 @@ pub fn run() {
             hInstance: HINSTANCE(hinstance.0),
             hIcon: large_icon,
             hIconSm: small_icon,
-            hCursor: LoadCursorW(HINSTANCE::default(), IDC_ARROW).unwrap_or_default(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             hbrBackground: HBRUSH(std::ptr::null_mut()),
             lpszClassName: PCWSTR::from_raw(class_name.as_ptr()),
             ..Default::default()
@@ -1524,6 +1685,12 @@ pub fn run() {
                 (path, theme)
             });
         let custom_theme_enabled = true;
+        let theme_clock_interval = active_theme
+            .as_ref()
+            .and_then(ThemeDocument::current_time_refresh_interval);
+        let tray_theme_uses_current_time = active_theme
+            .as_ref()
+            .is_some_and(theme_tray_uses_current_time);
         if let Some(path) = &active_theme_path {
             let path = path.to_string_lossy().into_owned();
             if settings.active_theme_path.as_deref() != Some(path.as_str())
@@ -1538,11 +1705,14 @@ pub fn run() {
         let language = localization::resolve_language(language_override);
         let install_channel = updater::current_install_channel();
 
+        refresh_theme_host_geometry();
+
         // Create as layered popup (will be reparented into taskbar)
         let title = native_interop::wide_str(language.strings().window_title);
         let initial_runtime = ThemeRuntime::from_providers(settings.enabled_providers())
             .with_poll_state(false, false)
-            .with_language(language);
+            .with_language(language)
+            .with_countdown(settings.usage_countdown);
         let (initial_width, initial_height) = active_theme
             .as_ref()
             .map(|theme| {
@@ -1565,9 +1735,9 @@ pub fn run() {
             0,
             initial_width,
             initial_height,
-            HWND::default(),
-            HMENU::default(),
-            hinstance,
+            None,
+            None,
+            Some(HINSTANCE(hinstance.0)),
             None,
         )
         .unwrap();
@@ -1576,16 +1746,16 @@ pub fn run() {
             let _ = SendMessageW(
                 hwnd,
                 WM_SETICON,
-                WPARAM(ICON_BIG as usize),
-                LPARAM(large_icon.0 as isize),
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(large_icon.0 as isize)),
             );
         }
         if !small_icon.is_invalid() {
             let _ = SendMessageW(
                 hwnd,
                 WM_SETICON,
-                WPARAM(ICON_SMALL as usize),
-                LPARAM(small_icon.0 as isize),
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small_icon.0 as isize)),
             );
         }
 
@@ -1622,8 +1792,11 @@ pub fn run() {
                 drag_start_mouse_x: 0,
                 drag_start_offset: 0,
                 custom_theme_enabled,
+                usage_countdown: settings.usage_countdown,
                 active_theme_path,
                 active_theme,
+                theme_clock_interval,
+                tray_theme_uses_current_time,
                 mirror_hwnds: Vec::new(),
                 desktop_hwnds: Vec::new(),
                 mouse_action_overrides: HashMap::new(),
@@ -1651,6 +1824,8 @@ pub fn run() {
 
         // Initial render using the presenter selected by the surface nest.
         render_layered();
+        schedule_countdown_timer();
+        schedule_clock_timer();
 
         if open_dashboard_on_start {
             crate::dashboard::show(hwnd);
@@ -1664,7 +1839,7 @@ pub fn run() {
                 .map(|s| s.poll_interval_ms)
                 .unwrap_or(POLL_15_MIN)
         };
-        SetTimer(hwnd, TIMER_POLL, initial_poll_ms, None);
+        SetTimer(Some(hwnd), TIMER_POLL, initial_poll_ms, None);
         sync_window_state_timer(hwnd);
 
         // Watch for explorer.exe restarts so we can re-embed and re-add the tray
@@ -1699,7 +1874,7 @@ pub fn run() {
 
         // Message loop
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -1976,7 +2151,7 @@ fn do_poll_once(hwnd: HWND) {
                 // Stop fast-poll if reset data is now fresh
                 if !poller::app_is_past_reset(&data) {
                     unsafe {
-                        let _ = KillTimer(hwnd, TIMER_RESET_POLL);
+                        let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
                     }
                 }
 
@@ -1995,7 +2170,7 @@ fn do_poll_once(hwnd: HWND) {
                     s.retry_count = 0;
                     let interval = s.poll_interval_ms;
                     unsafe {
-                        SetTimer(hwnd, TIMER_POLL, interval, None);
+                        SetTimer(Some(hwnd), TIMER_POLL, interval, None);
                     }
                 }
                 s.force_notify_auth_error = false;
@@ -2012,7 +2187,7 @@ fn do_poll_once(hwnd: HWND) {
             }
 
             unsafe {
-                let _ = PostMessageW(hwnd, WM_APP_USAGE_UPDATED, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_APP_USAGE_UPDATED, WPARAM(0), LPARAM(0));
             }
         }
         Err(failure) => {
@@ -2028,10 +2203,20 @@ fn do_poll_once(hwnd: HWND) {
                 poller::PollError::RequestFailed => None,
             };
             // Distinguish auth-required errors from transient errors.
-            let (notify_auth_error, cache_data) = {
+            let (notify_auth_error, cache_data, cache_poll_ok) = {
                 let mut state = lock_state();
                 let mut should_notify = false;
                 if let Some(s) = state.as_mut() {
+                    if matches!(failure.error, poller::PollError::RequestFailed) {
+                        if let Some(previous) = s.data.as_ref() {
+                            let carried = poller::carry_forward_failures(
+                                AppUsageData::default(),
+                                previous,
+                                enabled_providers,
+                            );
+                            s.data = Some(carried);
+                        }
+                    }
                     s.last_poll_ok = false;
                     match auth_watch {
                         Some((watch_mode, watch_snapshot)) => {
@@ -2045,10 +2230,10 @@ fn do_poll_once(hwnd: HWND) {
                             s.auth_watch_snapshot = watch_snapshot;
                             s.retry_count = s.retry_count.saturating_add(1);
                             unsafe {
-                                let _ = KillTimer(hwnd, TIMER_POLL);
-                                let _ = KillTimer(hwnd, TIMER_RESET_POLL);
-                                let _ = KillTimer(hwnd, TIMER_COUNTDOWN);
-                                SetTimer(hwnd, TIMER_POLL, s.poll_interval_ms, None);
+                                let _ = KillTimer(Some(hwnd), TIMER_POLL);
+                                let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
+                                let _ = KillTimer(Some(hwnd), TIMER_COUNTDOWN);
+                                SetTimer(Some(hwnd), TIMER_POLL, s.poll_interval_ms, None);
                             }
                         }
                         _ => {
@@ -2065,8 +2250,8 @@ fn do_poll_once(hwnd: HWND) {
                             );
                             let retry_ms = backoff.min(s.poll_interval_ms);
                             unsafe {
-                                let _ = KillTimer(hwnd, TIMER_RESET_POLL);
-                                SetTimer(hwnd, TIMER_POLL, retry_ms, None);
+                                let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
+                                SetTimer(Some(hwnd), TIMER_POLL, retry_ms, None);
                             }
                         }
                     }
@@ -2075,12 +2260,21 @@ fn do_poll_once(hwnd: HWND) {
                     .as_ref()
                     .and_then(|state| state.data.clone())
                     .unwrap_or_default();
-                (should_notify, cache_data)
+                let cache_poll_ok = state.as_ref().is_some_and(|state| {
+                    poll_display_state(
+                        state.last_poll_ok,
+                        state.retry_count,
+                        state.auth_error_paused_polling,
+                        state.data.as_ref(),
+                    )
+                    .0
+                });
+                (should_notify, cache_data, cache_poll_ok)
             };
-            // Theme Studio is a separate process and follows this cache. Record
-            // failed polls as well as successful ones so its preview does not
-            // present stale values while the live widget is showing an error.
-            let _ = app_settings::save_usage_cache(&cache_data, false);
+            // Theme Studio is a separate process and follows this cache. A
+            // transient failure with usable stale data remains displayable;
+            // hard failures and failures without a reading stay errors.
+            let _ = app_settings::save_usage_cache(&cache_data, cache_poll_ok);
 
             if notify_auth_error {
                 let balloon = {
@@ -2095,7 +2289,7 @@ fn do_poll_once(hwnd: HWND) {
             }
 
             unsafe {
-                let _ = PostMessageW(hwnd, WM_APP_USAGE_UPDATED, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(hwnd), WM_APP_USAGE_UPDATED, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -2111,29 +2305,25 @@ fn schedule_countdown_timer() {
     let hwnd = s.hwnd.to_hwnd();
     if !s.last_poll_ok {
         unsafe {
-            let _ = KillTimer(hwnd, TIMER_COUNTDOWN);
-            let _ = KillTimer(hwnd, TIMER_RESET_POLL);
+            let _ = KillTimer(Some(hwnd), TIMER_COUNTDOWN);
+            let _ = KillTimer(Some(hwnd), TIMER_RESET_POLL);
         }
         return;
     }
 
-    let data = match &s.data {
-        Some(d) => d,
-        None => return,
-    };
-
     // If a reset time has passed, poll every 5s to pick up fresh data
-    if poller::app_is_past_reset(data) {
+    if s.data.as_ref().is_some_and(poller::app_is_past_reset) {
         unsafe {
-            SetTimer(hwnd, TIMER_RESET_POLL, 5_000, None);
+            SetTimer(Some(hwnd), TIMER_RESET_POLL, 5_000, None);
         }
     }
 
-    let min_delay = data
-        .iter()
-        .flat_map(|(_, usage)| [&usage.session, &usage.weekly])
-        .filter_map(|section| poller::time_until_display_change(section.resets_at))
-        .min();
+    let min_delay = s.data.as_ref().and_then(|data| {
+        data.iter()
+            .flat_map(|(_, usage)| [&usage.session, &usage.weekly])
+            .filter_map(|section| poller::time_until_display_change(section.resets_at))
+            .min()
+    });
 
     let ms = min_delay
         .unwrap_or(Duration::from_secs(60))
@@ -2141,8 +2331,36 @@ fn schedule_countdown_timer() {
         .max(1000) as u32;
 
     unsafe {
-        SetTimer(hwnd, TIMER_COUNTDOWN, ms, None);
+        SetTimer(Some(hwnd), TIMER_COUNTDOWN, ms, None);
     }
+}
+
+fn schedule_clock_timer() {
+    let state = lock_state();
+    let Some(s) = state.as_ref() else {
+        return;
+    };
+    let hwnd = s.hwnd.to_hwnd();
+    let Some(interval) = s.theme_clock_interval else {
+        unsafe {
+            let _ = KillTimer(Some(hwnd), TIMER_CLOCK);
+        }
+        return;
+    };
+    let ms = time_until_next_clock_refresh(interval).as_millis().max(1) as u32;
+    unsafe {
+        SetTimer(Some(hwnd), TIMER_CLOCK, ms, None);
+    }
+}
+
+fn time_until_next_clock_refresh(interval: Duration) -> Duration {
+    let interval_ms = interval.as_millis().max(1);
+    let elapsed_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    let remaining_ms = interval_ms - elapsed_ms % interval_ms;
+    Duration::from_millis(remaining_ms as u64)
 }
 
 fn check_theme_change() {
@@ -2184,11 +2402,12 @@ fn reload_external_settings(hwnd: HWND) {
         providers_changed = state.providers != settings.enabled_providers();
         state.poll_interval_ms = settings.poll_interval_ms;
         state.providers = settings.enabled_providers();
+        state.usage_countdown = settings.usage_countdown;
         state.taskbar_index = settings.taskbar_index;
         apply_language_to_state(state, language_override);
     }
     unsafe {
-        SetTimer(hwnd, TIMER_POLL, settings.poll_interval_ms, None);
+        SetTimer(Some(hwnd), TIMER_POLL, settings.poll_interval_ms, None);
     }
     let _ = apply_custom_theme(hwnd, settings.custom_theme_enabled, theme_path, None);
     if providers_changed {
@@ -2199,7 +2418,9 @@ fn reload_external_settings(hwnd: HWND) {
     render_layered();
 }
 
+mod host_geometry;
 mod message_loop;
+use host_geometry::*;
 use message_loop::wnd_proc;
 mod positioning;
 use positioning::*;
@@ -2224,5 +2445,119 @@ mod language_menu_tests {
                 Some(language)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tray_usage_summary_tests {
+    use super::*;
+    use crate::models::{UsageData, UsageSection};
+
+    fn usage(session: f64, weekly: f64, weekly_label: Option<&str>) -> UsageData {
+        UsageData {
+            session: UsageSection {
+                percentage: session,
+                resets_at: None,
+            },
+            weekly: UsageSection {
+                percentage: weekly,
+                resets_at: None,
+            },
+            weekly_label: weekly_label.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tray_summary_formats_enabled_provider_usage() {
+        let data = [(ProviderId::Claude, usage(4.6, 42.4, None))]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            tray_usage_summary_lines(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Claude]),
+                LanguageId::English,
+                false,
+            ),
+            ["Claude Code 5h: 5% | 7d: 42%"]
+        );
+    }
+
+    #[test]
+    fn tray_summary_counts_down_when_the_widget_shows_what_is_left() {
+        let data = [(ProviderId::Claude, usage(4.6, 42.4, None))]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            tray_usage_summary_lines(
+                &data,
+                ProviderSet::from_enabled([ProviderId::Claude]),
+                LanguageId::English,
+                true,
+            ),
+            ["Claude Code 5h: 95% | 7d: 58%"]
+        );
+    }
+
+    #[test]
+    fn tray_summary_uses_provider_window_labels_and_selection() {
+        let data = [
+            (ProviderId::Claude, usage(10.0, 20.0, None)),
+            (ProviderId::OpenCode, usage(30.0, 40.0, Some("30d"))),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            tray_usage_summary_lines(
+                &data,
+                ProviderSet::from_enabled([ProviderId::OpenCode]),
+                LanguageId::English,
+                false,
+            ),
+            ["OpenCode 5h: 30% | 30d: 40%"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod poll_display_state_tests {
+    use super::*;
+    use crate::models::UsageData;
+
+    fn cached_usage(stale: bool) -> AppUsageData {
+        let usage = UsageData {
+            stale,
+            ..Default::default()
+        };
+        [(ProviderId::Claude, usage)].into_iter().collect()
+    }
+
+    #[test]
+    fn transient_failure_keeps_a_stale_reading_displayable() {
+        let data = cached_usage(true);
+        assert_eq!(
+            poll_display_state(false, 1, false, Some(&data)),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn failures_without_stale_data_remain_errors() {
+        let fresh = cached_usage(false);
+        let stale = cached_usage(true);
+
+        assert_eq!(poll_display_state(false, 1, false, None), (false, true));
+        assert_eq!(
+            poll_display_state(false, 1, false, Some(&fresh)),
+            (false, true)
+        );
+        assert_eq!(
+            poll_display_state(false, 1, true, Some(&stale)),
+            (false, true)
+        );
     }
 }

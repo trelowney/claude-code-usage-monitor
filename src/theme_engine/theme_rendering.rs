@@ -22,7 +22,7 @@ pub fn format_template(template: &str, context: &DataContext) -> String {
         };
         let end = index + 1 + relative_end;
         let token: String = chars[index + 1..end].iter().collect();
-        let (expression, format) = token.rsplit_once(':').unwrap_or((&token, "0.##"));
+        let (expression, format) = split_template_token(&token);
         let expression = expression.trim();
         let format = format.trim();
         if let Some(value) = context.get_string(expression) {
@@ -33,8 +33,11 @@ pub fn format_template(template: &str, context: &DataContext) -> String {
             output
                 .push_str(&format_usage_badge(expression, context).unwrap_or_else(|| "--".into()));
         } else {
-            match evaluate(expression, context) {
-                Ok(value) => output.push_str(&format_value(value, format, context)),
+            match evaluate_value(expression, context) {
+                Ok(ExpressionValue::Number(value)) => {
+                    output.push_str(&format_value(value, format, context));
+                }
+                Ok(ExpressionValue::Text(value)) => output.push_str(&value),
                 Err(_) => output.push_str("--"),
             }
         }
@@ -99,6 +102,7 @@ pub fn render_theme_surface_with_runtime_at_scale(
         height: logical_height as f64,
         parent_width: logical_width as f64,
         parent_height: logical_height as f64,
+        gap: evaluate(&surface.gap.0, &context).unwrap_or(0.0).max(0.0),
         opacity: 1.0,
         rotation: evaluate(&surface.rotation.0, &context).unwrap_or(0.0),
         clip: Vec::new(),
@@ -267,6 +271,7 @@ pub(super) fn resolve_objects_for<'a>(
             height: geometry.height,
             parent_width: geometry.parent_width,
             parent_height: geometry.parent_height,
+            gap: geometry.gap,
             opacity: geometry.opacity,
             rotation: geometry.rotation,
             clip: geometry.clip,
@@ -414,7 +419,22 @@ pub(super) fn resolve_object_size(
     warnings: &mut Vec<String>,
 ) -> (u32, u32) {
     let fallback = Canvas::default();
-    let context = DataContext::from_usage_with_runtime(data, &fallback, runtime);
+    let mut context = DataContext::from_usage_with_runtime(data, &fallback, runtime);
+    let gap = match evaluate(&object.gap.0, &context) {
+        Ok(value) if value.is_finite() => value.max(0.0),
+        Ok(_) => {
+            warnings.push(format!(
+                "{}.gap did not produce a finite value",
+                object.name
+            ));
+            0.0
+        }
+        Err(error) => {
+            warnings.push(format!("{}.gap: {error}", object.name));
+            0.0
+        }
+    };
+    context.insert("this.gap", gap);
     let mut resolve = |label: &str, expression: &Expression, fallback: u32| match evaluate(
         &expression.0,
         &context,
@@ -514,6 +534,7 @@ pub(super) struct ObjectGeometry {
     height: f64,
     parent_width: f64,
     parent_height: f64,
+    gap: f64,
     opacity: f64,
     rotation: f64,
     clip: Vec<ClipRegion>,
@@ -573,6 +594,7 @@ pub(super) fn resolve_geometry(
                 height: canvas.height as f64,
                 parent_width: canvas.width as f64,
                 parent_height: canvas.height as f64,
+                gap: evaluate(&root.gap.0, context).unwrap_or(0.0).max(0.0),
                 opacity: 1.0,
                 rotation: evaluate(&root.rotation.0, context).unwrap_or(0.0),
                 clip: Vec::new(),
@@ -610,6 +632,7 @@ pub(super) fn resolve_geometry(
             height: canvas.height as f64,
             parent_width: canvas.width as f64,
             parent_height: canvas.height as f64,
+            gap: evaluate(&root.gap.0, context).unwrap_or(0.0).max(0.0),
             opacity: 1.0,
             rotation: evaluate(&root.rotation.0, context).unwrap_or(0.0),
             clip: Vec::new(),
@@ -620,6 +643,22 @@ pub(super) fn resolve_geometry(
     let mut object_context = context.clone();
     object_context.insert("parent.width", parent.width);
     object_context.insert("parent.height", parent.height);
+    object_context.insert("parent.gap", parent.gap);
+    let gap = match evaluate(&object.gap.0, &object_context) {
+        Ok(value) if value.is_finite() => value.max(0.0),
+        Ok(_) => {
+            warnings.push(format!(
+                "{}.gap did not produce a finite value",
+                object.name
+            ));
+            0.0
+        }
+        Err(error) => {
+            warnings.push(format!("{}.gap: {error}", object.name));
+            0.0
+        }
+    };
+    object_context.insert("this.gap", gap);
     let mut value = |name: &str, expression: &Expression, fallback: f64| match evaluate(
         &expression.0,
         &object_context,
@@ -644,13 +683,10 @@ pub(super) fn resolve_geometry(
     let parent_object = parent_index
         .map(|parent_index| &layers[parent_index])
         .unwrap_or(root);
-    let managed_layout = (parent_object.layout != ChildLayout::Freeform).then_some((
-        parent_object.layout,
-        parent_object.align,
-        &parent_object.gap,
-    ));
-    let (local_x, local_y) = if let Some((layout, align, gap)) = managed_layout {
-        let gap = value("parent.gap", gap, 0.0).max(0.0);
+    let managed_layout = (parent_object.layout != ChildLayout::Freeform)
+        .then_some((parent_object.layout, parent_object.align));
+    let (local_x, local_y) = if let Some((layout, align)) = managed_layout {
+        let gap = parent.gap;
         let mut cursor = 0.0;
         for sibling_index in 0..index {
             let same_parent = match parent_index {
@@ -747,6 +783,7 @@ pub(super) fn resolve_geometry(
         height,
         parent_width: parent.width,
         parent_height: parent.height,
+        gap,
         opacity: parent.opacity
             * (value("visibility", &object.visibility, 100.0).clamp(0.0, 100.0) / 100.0),
         rotation,
@@ -1062,7 +1099,7 @@ pub(super) fn render_text_mask(
         return;
     }
     unsafe {
-        let memory_dc = CreateCompatibleDC(HDC::default());
+        let memory_dc = CreateCompatibleDC(None);
         if memory_dc.is_invalid() {
             return;
         }
@@ -1079,13 +1116,20 @@ pub(super) fn render_text_mask(
             ..Default::default()
         };
         let mut bits = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(memory_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0)
-            .unwrap_or_default();
+        let bitmap = CreateDIBSection(
+            Some(memory_dc),
+            &bitmap_info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            None,
+            0,
+        )
+        .unwrap_or_default();
         if bitmap.is_invalid() || bits.is_null() {
             let _ = DeleteDC(memory_dc);
             return;
         }
-        let old_bitmap = SelectObject(memory_dc, bitmap);
+        let old_bitmap = SelectObject(memory_dc, bitmap.into());
         std::ptr::write_bytes(bits, 0, width as usize * height as usize * 4);
         let font_name: Vec<u16> = font_family.encode_utf16().chain(Some(0)).collect();
         let font = CreateFontW(
@@ -1097,14 +1141,14 @@ pub(super) fn render_text_mask(
             0,
             0,
             0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_TT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            rendering.gdi_quality(),
+            DEFAULT_CHARSET,
+            OUT_TT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(rendering.gdi_quality() as u8),
             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
             PCWSTR::from_raw(font_name.as_ptr()),
         );
-        let old_font = SelectObject(memory_dc, font);
+        let old_font = SelectObject(memory_dc, font.into());
         let _ = SetBkMode(memory_dc, TRANSPARENT);
         let _ = SetTextColor(memory_dc, COLORREF(0x00FF_FFFF));
         let mut rect = RECT {
@@ -1133,9 +1177,9 @@ pub(super) fn render_text_mask(
             }
         }
         SelectObject(memory_dc, old_font);
-        let _ = DeleteObject(font);
+        let _ = DeleteObject(font.into());
         SelectObject(memory_dc, old_bitmap);
-        let _ = DeleteObject(bitmap);
+        let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(memory_dc);
     }
 }

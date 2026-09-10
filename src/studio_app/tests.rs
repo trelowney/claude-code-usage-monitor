@@ -1,11 +1,51 @@
 use super::*;
 
+fn run_test_ui(context: &egui::Context, input: egui::RawInput, run_ui: impl FnMut(&mut egui::Ui)) {
+    let mut output = context.run_ui(input, run_ui);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn dashboard_keeps_dark_visuals_when_system_theme_changes() {
+    for initial_theme in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+        let context = egui::Context::default();
+        run_test_ui(
+            &context,
+            egui::RawInput {
+                system_theme: initial_theme,
+                ..Default::default()
+            },
+            |_| {},
+        );
+        configure_style(&context, LanguageId::English);
+
+        for system_theme in [egui::Theme::Light, egui::Theme::Dark, egui::Theme::Light] {
+            run_test_ui(
+                &context,
+                egui::RawInput {
+                    system_theme: Some(system_theme),
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(ui.visuals().dark_mode);
+                    assert_eq!(ui.visuals().panel_fill, menu_surface());
+                    assert_eq!(
+                        ui.visuals().text_color(),
+                        egui::Visuals::dark().text_color()
+                    );
+                    assert_eq!(ui.spacing().item_spacing, egui::vec2(9.0, 8.0));
+                },
+            );
+        }
+    }
+}
+
 #[test]
 fn configured_fonts_render_fallback_text_and_lucide_icons() {
     let context = egui::Context::default();
     configure_style(&context, LanguageId::English);
 
-    let _ = context.run_ui(egui::RawInput::default(), |ui| {
+    run_test_ui(&context, egui::RawInput::default(), |ui| {
         let fallback = ui.ctx().fonts_mut(|fonts| {
             fonts.layout_no_wrap(
                 "Fallback — ‘ready’".into(),
@@ -88,7 +128,7 @@ fn context_menu_preview_submenu_opens_on_hover() {
         .events
         .push(egui::Event::PointerMoved(egui::pos2(50.0, 20.0)));
     let mut popup_rect = None;
-    let _ = context.run_ui(input, |ui| {
+    run_test_ui(&context, input, |ui| {
         let (_, popup) = preview_context_menu_submenu(
             ui,
             egui::Button::new("").min_size(egui::vec2(120.0, 24.0)),
@@ -111,7 +151,7 @@ fn context_menu_preview_submenu_opens_on_hover() {
         popup_rect.center().y,
     )));
     let mut remained_open = false;
-    let _ = context.run_ui(input, |ui| {
+    run_test_ui(&context, input, |ui| {
         let (_, popup) = preview_context_menu_submenu(
             ui,
             egui::Button::new("").min_size(egui::vec2(120.0, 24.0)),
@@ -136,7 +176,7 @@ fn context_menu_preview_submenu_opens_on_hover() {
         .events
         .push(egui::Event::PointerMoved(popup_rect.center()));
     remained_open = false;
-    let _ = context.run_ui(input, |ui| {
+    run_test_ui(&context, input, |ui| {
         let (_, popup) = preview_context_menu_submenu(
             ui,
             egui::Button::new("").min_size(egui::vec2(120.0, 24.0)),
@@ -174,7 +214,7 @@ fn context_menu_preview_submenu_opens_on_hover() {
         },
     ]);
     remained_open = true;
-    let _ = context.run_ui(input, |ui| {
+    run_test_ui(&context, input, |ui| {
         preview_context_menu_submenu(
             ui,
             egui::Button::new("").min_size(egui::vec2(120.0, 24.0)),
@@ -200,7 +240,7 @@ fn context_menu_preview_submenu_opens_on_hover() {
         screen_rect: Some(screen_rect),
         ..Default::default()
     };
-    let _ = context.run_ui(input, |ui| {
+    run_test_ui(&context, input, |ui| {
         let (_, popup) = preview_context_menu_submenu(
             ui,
             egui::Button::new("").min_size(egui::vec2(120.0, 24.0)),
@@ -320,6 +360,7 @@ fn app_with_surfaces(surfaces: Vec<SceneObject>) -> StudioApp {
         usage_has_error: false,
         last_cache_read: Instant::now(),
         next_preview_countdown_refresh: None,
+        next_preview_clock_refresh: None,
         dirty: false,
         live_apply: DEFAULT_LIVE_APPLY,
         zoom: 1.0,
@@ -561,6 +602,13 @@ fn text_helper_catalog_only_builds_valid_template_tokens() {
         text_template_token("claude.session.percentage", TextTemplateFormat::Percentage),
         "{claude.session.percentage:percent}"
     );
+    let display = text_template_value("claude.session.display").unwrap();
+    for format in [
+        TextTemplateFormat::UsageLine,
+        TextTemplateFormat::UsageBadge,
+    ] {
+        assert!(text_template_formats(display.kind).contains(&format));
+    }
 }
 
 #[test]

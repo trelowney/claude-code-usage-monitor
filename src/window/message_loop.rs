@@ -17,6 +17,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_DISPLAYCHANGE | WM_DPICHANGED_MSG | WM_SETTINGCHANGE => {
+            refresh_theme_host_geometry();
             if msg == WM_DPICHANGED_MSG {
                 let new_dpi = (wparam.0 & 0xFFFF) as u32;
                 CURRENT_DPI.store(new_dpi, Ordering::Relaxed);
@@ -72,6 +73,16 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     sync_tray_icon(hwnd);
                     schedule_countdown_timer();
                 }
+                TIMER_CLOCK => {
+                    render_layered();
+                    let refresh_tray = lock_state()
+                        .as_ref()
+                        .is_some_and(|state| state.tray_theme_uses_current_time);
+                    if refresh_tray {
+                        sync_tray_icon(hwnd);
+                    }
+                    schedule_clock_timer();
+                }
                 TIMER_RESET_POLL => {
                     let should_poll = {
                         let state = lock_state();
@@ -91,7 +102,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     sync_theme_window_visibility();
                 }
                 TIMER_MOUSE_CLICK => {
-                    let _ = KillTimer(hwnd, TIMER_MOUSE_CLICK);
+                    let _ = KillTimer(Some(hwnd), TIMER_MOUSE_CLICK);
                     let pending = lock_state()
                         .as_mut()
                         .and_then(|state| state.pending_mouse_click.take());
@@ -115,6 +126,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             check_language_change();
             render_layered();
             schedule_countdown_timer();
+            schedule_clock_timer();
             sync_tray_icon(hwnd);
             LRESULT(0)
         }
@@ -317,7 +329,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     }
                     save_state_settings();
                     // Reset the poll timer with the new interval
-                    SetTimer(hwnd, TIMER_POLL, new_interval, None);
+                    SetTimer(Some(hwnd), TIMER_POLL, new_interval, None);
                 }
                 id if ProviderId::from_native_menu_command_id(id).is_some() => {
                     {
@@ -431,6 +443,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         _ if msg == taskbar_created_message() => {
+            refresh_theme_host_geometry();
             // Explorer discards notification icons when it restarts. Floating
             // and tray-icon-only themes keep their owner HWND, so restore the
             // registrations when the shell broadcasts its return.

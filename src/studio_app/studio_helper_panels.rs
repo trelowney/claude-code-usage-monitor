@@ -10,6 +10,12 @@ pub(super) struct TextTemplateValue {
 
 pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     TextTemplateValue {
+        group: "Date and time",
+        label: "Current date and time",
+        expression: "time.now.unix",
+        kind: TextTemplateValueKind::Timestamp,
+    },
+    TextTemplateValue {
         group: "Application",
         label: "App version",
         expression: "app.version",
@@ -40,6 +46,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         kind: TextTemplateValueKind::Number,
     },
     TextTemplateValue {
+        group: "General",
+        label: "Counting down",
+        expression: "display.countdown",
+        kind: TextTemplateValueKind::Number,
+    },
+    TextTemplateValue {
         group: "Active provider",
         label: "Session summary",
         expression: "active.session",
@@ -59,9 +71,21 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Active provider",
+        label: "Session shown",
+        expression: "active.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Active provider",
         label: "Session reset",
         expression: "active.session.reset.seconds",
         kind: TextTemplateValueKind::Duration,
+    },
+    TextTemplateValue {
+        group: "Active provider",
+        label: "Session reset date and time",
+        expression: "active.session.reset.unix",
+        kind: TextTemplateValueKind::Timestamp,
     },
     TextTemplateValue {
         group: "Active provider",
@@ -83,9 +107,21 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Active provider",
+        label: "Weekly shown",
+        expression: "active.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Active provider",
         label: "Weekly reset",
         expression: "active.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
+    },
+    TextTemplateValue {
+        group: "Active provider",
+        label: "Weekly reset date and time",
+        expression: "active.weekly.reset.unix",
+        kind: TextTemplateValueKind::Timestamp,
     },
     TextTemplateValue {
         group: "Claude Code",
@@ -104,6 +140,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         label: "Session remaining",
         expression: "claude.session.remaining",
         kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "Claude Code",
+        label: "Session shown",
+        expression: "claude.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
     },
     TextTemplateValue {
         group: "Claude Code",
@@ -131,6 +173,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Claude Code",
+        label: "Weekly shown",
+        expression: "claude.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Claude Code",
         label: "Weekly reset",
         expression: "claude.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
@@ -152,6 +200,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         label: "Session remaining",
         expression: "codex.session.remaining",
         kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "Codex",
+        label: "Session shown",
+        expression: "codex.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
     },
     TextTemplateValue {
         group: "Codex",
@@ -179,9 +233,21 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Codex",
+        label: "Five-hour shown (exact)",
+        expression: "codex.five_hour.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Codex",
         label: "Five-hour reset (exact)",
         expression: "codex.five_hour.reset.seconds",
         kind: TextTemplateValueKind::Duration,
+    },
+    TextTemplateValue {
+        group: "Codex",
+        label: "Five-hour reset date and time (exact)",
+        expression: "codex.five_hour.reset.unix",
+        kind: TextTemplateValueKind::Timestamp,
     },
     TextTemplateValue {
         group: "Codex",
@@ -203,9 +269,21 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Codex",
+        label: "Weekly shown",
+        expression: "codex.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Codex",
         label: "Weekly reset",
         expression: "codex.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
+    },
+    TextTemplateValue {
+        group: "Codex",
+        label: "Weekly reset date and time",
+        expression: "codex.weekly.reset.unix",
+        kind: TextTemplateValueKind::Timestamp,
     },
     TextTemplateValue {
         group: "Antigravity",
@@ -224,6 +302,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         label: "Session remaining",
         expression: "antigravity.session.remaining",
         kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "Antigravity",
+        label: "Session shown",
+        expression: "antigravity.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
     },
     TextTemplateValue {
         group: "Antigravity",
@@ -251,6 +335,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Antigravity",
+        label: "Weekly shown",
+        expression: "antigravity.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Antigravity",
         label: "Weekly reset",
         expression: "antigravity.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
@@ -272,6 +362,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         label: "Session remaining",
         expression: "opencode.session.remaining",
         kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "OpenCode",
+        label: "Session shown",
+        expression: "opencode.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
     },
     TextTemplateValue {
         group: "OpenCode",
@@ -305,6 +401,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "OpenCode",
+        label: "Long-window shown",
+        expression: "opencode.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "OpenCode",
         label: "Long-window reset",
         expression: "opencode.weekly.reset.seconds",
         kind: TextTemplateValueKind::Duration,
@@ -329,6 +431,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
     },
     TextTemplateValue {
         group: "Cursor",
+        label: "Auto shown",
+        expression: "cursor.session.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
+    },
+    TextTemplateValue {
+        group: "Cursor",
         label: "Auto reset",
         expression: "cursor.session.reset.seconds",
         kind: TextTemplateValueKind::Duration,
@@ -350,6 +458,12 @@ pub(super) const TEXT_TEMPLATE_VALUES: &[TextTemplateValue] = &[
         label: "API remaining",
         expression: "cursor.weekly.remaining",
         kind: TextTemplateValueKind::Percentage,
+    },
+    TextTemplateValue {
+        group: "Cursor",
+        label: "API shown",
+        expression: "cursor.weekly.display",
+        kind: TextTemplateValueKind::DisplayPercentage,
     },
     TextTemplateValue {
         group: "Cursor",
@@ -400,9 +514,45 @@ pub(super) fn text_template_formats(kind: TextTemplateValueKind) -> &'static [Te
             Format::TwoDecimals,
             Format::Automatic,
         ],
+        TextTemplateValueKind::DisplayPercentage => &[
+            Format::Percentage,
+            Format::WholeNumber,
+            Format::OneDecimal,
+            Format::TwoDecimals,
+            Format::Automatic,
+            Format::UsageLine,
+            Format::UsageBadge,
+        ],
         TextTemplateValueKind::Duration => &[
             Format::ShortDuration,
             Format::DetailedDuration,
+            Format::WholeNumber,
+        ],
+        TextTemplateValueKind::Timestamp => &[
+            Format::WeekdayTwo,
+            Format::WeekdayShort,
+            Format::WeekdayLong,
+            Format::Day,
+            Format::DayTwo,
+            Format::Month,
+            Format::MonthTwo,
+            Format::MonthShort,
+            Format::MonthLong,
+            Format::YearTwo,
+            Format::Year,
+            Format::DateShort,
+            Format::DateLong,
+            Format::TimeShort,
+            Format::TimeSeconds,
+            Format::Time24,
+            Format::Time24Seconds,
+            Format::Time12,
+            Format::Time12Seconds,
+            Format::DateTimeShort,
+            Format::DateTimeLong,
+            Format::IsoDate,
+            Format::IsoTime,
+            Format::IsoDateTime,
             Format::WholeNumber,
         ],
         TextTemplateValueKind::UsageSummary => &[Format::UsageLine, Format::UsageBadge],
@@ -428,6 +578,30 @@ pub(super) fn text_template_format_label(
         TextTemplateFormat::DetailedDuration => language.text("Detailed duration"),
         TextTemplateFormat::UsageLine => language.text("Usage and reset"),
         TextTemplateFormat::UsageBadge => language.text("Usage only"),
+        TextTemplateFormat::WeekdayTwo => language.text("Weekday (2 letters)"),
+        TextTemplateFormat::WeekdayShort => language.text("Weekday (short)"),
+        TextTemplateFormat::WeekdayLong => language.text("Weekday (full)"),
+        TextTemplateFormat::Day => language.text("Day"),
+        TextTemplateFormat::DayTwo => language.text("Day (2 digits)"),
+        TextTemplateFormat::Month => language.text("Month"),
+        TextTemplateFormat::MonthTwo => language.text("Month (2 digits)"),
+        TextTemplateFormat::MonthShort => language.text("Month (short)"),
+        TextTemplateFormat::MonthLong => language.text("Month (full)"),
+        TextTemplateFormat::YearTwo => language.text("Year (2 digits)"),
+        TextTemplateFormat::Year => language.text("Year"),
+        TextTemplateFormat::DateShort => language.text("Short date"),
+        TextTemplateFormat::DateLong => language.text("Long date"),
+        TextTemplateFormat::TimeShort => language.text("Time"),
+        TextTemplateFormat::TimeSeconds => language.text("Time with seconds"),
+        TextTemplateFormat::Time24 => language.text("24-hour time"),
+        TextTemplateFormat::Time24Seconds => language.text("24-hour time with seconds"),
+        TextTemplateFormat::Time12 => language.text("12-hour time"),
+        TextTemplateFormat::Time12Seconds => language.text("12-hour time with seconds"),
+        TextTemplateFormat::DateTimeShort => language.text("Short date and time"),
+        TextTemplateFormat::DateTimeLong => language.text("Long date and time"),
+        TextTemplateFormat::IsoDate => language.text("ISO date"),
+        TextTemplateFormat::IsoTime => language.text("ISO time"),
+        TextTemplateFormat::IsoDateTime => language.text("ISO date and time"),
         TextTemplateFormat::PlainText => language.text("Plain text"),
     }
 }
@@ -443,6 +617,30 @@ pub(super) fn text_template_format_code(format: TextTemplateFormat) -> Option<&'
         TextTemplateFormat::DetailedDuration => Some("duration"),
         TextTemplateFormat::UsageLine => Some("usage_line"),
         TextTemplateFormat::UsageBadge => Some("usage_badge"),
+        TextTemplateFormat::WeekdayTwo => Some("weekday_2"),
+        TextTemplateFormat::WeekdayShort => Some("weekday_short"),
+        TextTemplateFormat::WeekdayLong => Some("weekday_long"),
+        TextTemplateFormat::Day => Some("day"),
+        TextTemplateFormat::DayTwo => Some("day_2"),
+        TextTemplateFormat::Month => Some("month"),
+        TextTemplateFormat::MonthTwo => Some("month_2"),
+        TextTemplateFormat::MonthShort => Some("month_short"),
+        TextTemplateFormat::MonthLong => Some("month_long"),
+        TextTemplateFormat::YearTwo => Some("year_2"),
+        TextTemplateFormat::Year => Some("year"),
+        TextTemplateFormat::DateShort => Some("date_short"),
+        TextTemplateFormat::DateLong => Some("date_long"),
+        TextTemplateFormat::TimeShort => Some("time_short"),
+        TextTemplateFormat::TimeSeconds => Some("time_seconds"),
+        TextTemplateFormat::Time24 => Some("time_24"),
+        TextTemplateFormat::Time24Seconds => Some("time_24_seconds"),
+        TextTemplateFormat::Time12 => Some("time_12"),
+        TextTemplateFormat::Time12Seconds => Some("time_12_seconds"),
+        TextTemplateFormat::DateTimeShort => Some("datetime_short"),
+        TextTemplateFormat::DateTimeLong => Some("datetime_long"),
+        TextTemplateFormat::IsoDate => Some("iso_date"),
+        TextTemplateFormat::IsoTime => Some("iso_time"),
+        TextTemplateFormat::IsoDateTime => Some("iso_datetime"),
         TextTemplateFormat::PlainText => None,
     }
 }
@@ -659,6 +857,7 @@ pub(super) fn action_reference_panels(
     target: &mut String,
     property: &mut MouseActionProperty,
     value: &mut String,
+    url: &mut String,
     context_menus: &[context_menu::ContextMenuDescriptor],
     context_menu_reference: &mut String,
     draft: &mut String,
@@ -677,6 +876,29 @@ pub(super) fn action_reference_panels(
                     }
                     if ui.button(language.text("Toggle dashboard")).clicked() {
                         append_action(draft, "toggle_dashboard()");
+                    }
+                    ui.label(
+                        egui::RichText::new(language.text("URL"))
+                            .small()
+                            .color(muted()),
+                    );
+                    ui.add(
+                        singleline_text_edit(url)
+                            .desired_width(ui.available_width())
+                            .hint_text("https://example.com/usage"),
+                    );
+                    if ui
+                        .add_enabled(
+                            context_menu::supported_url(url),
+                            egui::Button::new(language.text("Open URL")),
+                        )
+                        .on_disabled_hover_text(
+                            language.text("Only http and https links are allowed."),
+                        )
+                        .clicked()
+                    {
+                        let url = url.replace('\\', "\\\\").replace('"', "\\\"");
+                        append_action(draft, &format!("open_url(\"{url}\")"));
                     }
                     ui.label(
                         egui::RichText::new(language.text("Context menu"))
@@ -889,6 +1111,33 @@ pub(super) fn expression_variables_panel(
                     draft,
                     language,
                 );
+                let date_time = [
+                    "time.now.unix",
+                    "time.now.milliseconds",
+                    "time.local.year",
+                    "time.local.month",
+                    "time.local.day",
+                    "time.local.weekday",
+                    "time.local.hour",
+                    "time.local.minute",
+                    "time.local.second",
+                    "time.utc.year",
+                    "time.utc.month",
+                    "time.utc.day",
+                    "time.utc.weekday",
+                    "time.utc.hour",
+                    "time.utc.minute",
+                    "time.utc.second",
+                ];
+                expression_variable_group(
+                    ui,
+                    language.text("Date and time"),
+                    &date_time,
+                    &needle,
+                    context,
+                    draft,
+                    language,
+                );
                 let mut providers = vec!["providers.count".to_string()];
                 providers.extend(
                     PROVIDER_DESCRIPTORS
@@ -900,6 +1149,15 @@ pub(super) fn expression_variables_panel(
                     ui,
                     language.text("Providers"),
                     &providers,
+                    &needle,
+                    context,
+                    draft,
+                    language,
+                );
+                expression_variable_group(
+                    ui,
+                    language.text("Display"),
+                    &["display.countdown"],
                     &needle,
                     context,
                     draft,
@@ -931,7 +1189,7 @@ pub(super) fn expression_variables_panel(
                         &["session", "weekly"][..]
                     };
                     for window in windows {
-                        for metric in ["percentage", "remaining"] {
+                        for metric in ["percentage", "remaining", "display"] {
                             names.push(format!("{provider}.{window}.{metric}"));
                         }
                         for unit in ["unix", "seconds", "minutes", "hours", "days"] {
@@ -1014,6 +1272,12 @@ pub(super) fn expression_functions_panel(
             .max_height((height - 72.0).max(80.0))
             .show(ui, |ui| {
                 for (name, signature, insertion, detail) in [
+                    (
+                        "get",
+                        "get(this, property)",
+                        "get(this, gap)",
+                        "Value expression",
+                    ),
                     ("min", "min(a, b)", "min(0, 0)", "Smaller value"),
                     ("max", "max(a, b)", "max(0, 0)", "Larger value"),
                     (
