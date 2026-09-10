@@ -71,7 +71,7 @@ fn register_aumid() -> Result<(), String> {
         let result = RegCreateKeyExW(
             HKEY_CURRENT_USER,
             windows::core::PCWSTR::from_raw(path.as_ptr()),
-            0,
+            Some(0),
             windows::core::PCWSTR::null(),
             REG_OPTION_NON_VOLATILE,
             KEY_SET_VALUE,
@@ -90,7 +90,7 @@ fn register_aumid() -> Result<(), String> {
         let result = RegSetValueExW(
             hkey,
             windows::core::PCWSTR::from_raw(value_name.as_ptr()),
-            0,
+            Some(0),
             REG_SZ,
             Some(data_bytes),
         );
