@@ -589,15 +589,6 @@ fn tray_usage_summary_from_state() -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-fn tray_icon_tooltip_from_state() -> String {
-    tray_usage_summary_from_state().unwrap_or_else(|| {
-        lock_state()
-            .as_ref()
-            .map(|state| state.language.strings().window_title.to_string())
-            .unwrap_or_else(|| "Claude Code Usage Monitor".to_string())
-    })
-}
-
 fn sync_tray_icon(hwnd: HWND) {
     let usage_tooltip = tray_usage_summary_from_state();
     let themed = {

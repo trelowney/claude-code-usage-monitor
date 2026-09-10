@@ -379,20 +379,13 @@ fn build_ui_fallback_subset() {
         .retain_layout_tables(false)
         .retain_names(false)
         .drop_variations(true);
-    let (subset, stats) = subset_font_with_options(UBUNTU_LIGHT, &codepoints, &options)
+    let (subset, _stats) = subset_font_with_options(UBUNTU_LIGHT, &codepoints, &options)
         .expect("Failed to build the UI fallback font subset");
 
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR was not set"))
         .join("ui-fallback.ttf");
     write_if_changed(&output, &subset)
         .unwrap_or_else(|error| panic!("Failed to write {}: {error}", output.display()));
-
-    println!(
-        "cargo:warning=UI fallback font subset: {} characters, {} -> {} bytes",
-        codepoints.len(),
-        stats.original_size,
-        stats.subset_size
-    );
 }
 
 fn build_lucide_subset() {
@@ -432,20 +425,13 @@ fn build_lucide_subset() {
         .retain_layout_tables(false)
         .retain_names(false)
         .drop_variations(true);
-    let (subset, stats) = subset_font_with_options(LUCIDE_FONT_BYTES, &codepoints, &options)
+    let (subset, _stats) = subset_font_with_options(LUCIDE_FONT_BYTES, &codepoints, &options)
         .expect("Failed to build the Lucide icon font subset");
 
     let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR was not set"))
         .join("lucide-subset.ttf");
     write_if_changed(&output, &subset)
         .unwrap_or_else(|error| panic!("Failed to write {}: {error}", output.display()));
-
-    println!(
-        "cargo:warning=Lucide font subset: {} icons, {} -> {} bytes",
-        codepoints.len(),
-        stats.original_size,
-        stats.subset_size
-    );
 }
 
 fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
