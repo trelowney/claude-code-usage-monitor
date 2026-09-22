@@ -1293,10 +1293,6 @@ impl ThemeRuntime {
         self
     }
 
-    pub fn host_dimensions(self) -> (u32, u32) {
-        (self.host_width, self.host_height)
-    }
-
     pub fn provider_count(self) -> usize {
         self.providers.len().max(1)
     }

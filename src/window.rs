@@ -1399,8 +1399,6 @@ fn widget_frame_for_state(state: &AppState) -> positioning::WidgetFrame {
         positioning::WidgetFrame {
             width: 1,
             height: 1,
-            content_width: 1,
-            inset: 0,
         },
         |theme| {
             let runtime = theme_runtime_for_surface(theme, 0, theme_runtime_from_state(state));

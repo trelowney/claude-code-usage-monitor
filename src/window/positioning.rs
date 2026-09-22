@@ -511,8 +511,6 @@ pub(super) fn compute_anchor_y(anchor_top: i32, anchor_height: i32, widget_heigh
 pub(super) struct WidgetFrame {
     pub width: i32,
     pub height: i32,
-    pub content_width: i32,
-    pub inset: i32,
 }
 
 pub(super) fn widget_frame(
@@ -521,39 +519,10 @@ pub(super) fn widget_frame(
     runtime: ThemeRuntime,
     scale: f64,
 ) -> WidgetFrame {
-    let (content_width, height) =
-        theme_engine::resolve_surface_content_size(theme, 0, data, runtime);
-    let inset = theme_engine::surface_horizontal_padding(theme, 0, runtime);
+    let (width, height) = theme_engine::resolve_surface_size(theme, 0, data, runtime);
     WidgetFrame {
-        width: scaled_theme_dimension(content_width + 2 * inset, scale),
+        width: scaled_theme_dimension(width, scale),
         height: scaled_theme_dimension(height, scale),
-        content_width: scaled_theme_dimension(content_width, scale),
-        inset: (inset as f64 * scale).round() as i32,
-    }
-}
-
-pub(super) fn override_primary_placement(
-    theme: &mut ThemeDocument,
-    placement: theme_engine::Placement,
-) {
-    theme.placement = placement.clone();
-    if let Some(surface) = theme.surfaces.first_mut() {
-        surface.placement = placement;
-    }
-}
-
-pub(super) fn floating_placement(display: usize) -> theme_engine::Placement {
-    theme_engine::Placement {
-        reference: theme_engine::ReferenceTarget {
-            region: ReferenceRegion::Monitor,
-            display,
-        },
-        nest: SurfaceNest::Floating,
-        horizontal: HorizontalAnchor::Left,
-        vertical: VerticalAnchor::Top,
-        surface_horizontal: Some(HorizontalAnchor::Left),
-        surface_vertical: Some(VerticalAnchor::Top),
-        ..Default::default()
     }
 }
 

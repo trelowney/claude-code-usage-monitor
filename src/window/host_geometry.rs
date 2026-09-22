@@ -207,9 +207,21 @@ mod tests {
         // A theme author can pin a floating surface's host size directly,
         // without needing any live taskbar/monitor snapshot to derive it from.
         let (width, height) = (1920u32, 46u32);
-        let mut placement = positioning::floating_placement(0);
-        placement.host_dimensions = Some((width, height));
-        positioning::override_primary_placement(&mut theme, placement);
+        let placement = Placement {
+            reference: ReferenceTarget {
+                region: ReferenceRegion::Monitor,
+                display: 0,
+            },
+            nest: SurfaceNest::Floating,
+            horizontal: HorizontalAnchor::Left,
+            vertical: VerticalAnchor::Top,
+            surface_horizontal: Some(HorizontalAnchor::Left),
+            surface_vertical: Some(VerticalAnchor::Top),
+            host_dimensions: Some((width, height)),
+            ..Default::default()
+        };
+        theme.placement = placement.clone();
+        theme.surfaces[0].placement = placement;
         // A different monitor (or no monitor snapshot) cannot change layout.
         for geometry in [
             vec![],

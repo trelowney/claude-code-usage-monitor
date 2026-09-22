@@ -902,14 +902,26 @@ impl StudioApp {
             ),
             UpdateStatus::Idle => (
                 LucideIcon::RefreshCw,
-                language.text("Check for updates").to_string(),
+                format!(
+                    "{} (v{})",
+                    language.text("Check for updates"),
+                    env!("CARGO_PKG_VERSION")
+                ),
             ),
         };
         let response = ui
             .scope(|ui| {
                 ui.add_enabled_ui(!self.update_status.is_busy(), |ui| {
                     let icon_id = ui.id().with("version-update-icon");
-                    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+                    // The footer column is a fixed, narrow width shared with the
+                    // GitHub icon. This fork's `-trelowney.N` build suffix makes
+                    // the full CARGO_PKG_VERSION too wide to fit there, so only
+                    // the base version shows here; the full build string (with
+                    // suffix) is still one hover away, in the tooltip above.
+                    let base_version = env!("CARGO_PKG_VERSION")
+                        .split_once('-')
+                        .map_or(env!("CARGO_PKG_VERSION"), |(base, _)| base);
+                    let version = format!("v{base_version}");
                     let background = ui.painter().add(egui::Shape::Noop);
                     let button = egui::AtomLayout::new((
                         egui::RichText::new(&version).size(16.0).color(muted()),

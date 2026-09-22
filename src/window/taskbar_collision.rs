@@ -58,53 +58,6 @@ impl Occupancy {
                     && intersection(*item, padded).is_some()
             })
     }
-
-    /// Candidate gaps on either side of centred buttons, or between groups.
-    /// Only obstacles in the widget's row/column consume space in that lane.
-    pub fn free_slots(&self, widget: RECT) -> Vec<RECT> {
-        let horizontal = native_interop::is_taskbar_horizontal(self.bounds);
-        let (start, end) = if horizontal {
-            (self.bounds.left, self.bounds.right)
-        } else {
-            (self.bounds.top, self.bounds.bottom)
-        };
-        let mut intervals: Vec<_> = self
-            .occupied
-            .iter()
-            .filter_map(|item| {
-                let in_lane = if horizontal {
-                    item.top < widget.bottom && widget.top < item.bottom
-                } else {
-                    item.left < widget.right && widget.left < item.right
-                };
-                in_lane.then_some(if horizontal {
-                    (item.left, item.right)
-                } else {
-                    (item.top, item.bottom)
-                })
-            })
-            .collect();
-        intervals.sort_unstable();
-        let mut cursor = start;
-        let mut gaps = Vec::new();
-        for (left, right) in intervals.into_iter().chain(std::iter::once((end, end))) {
-            let left = left.clamp(start, end);
-            let right = right.clamp(start, end);
-            if left > cursor {
-                let mut rect = self.bounds;
-                if horizontal {
-                    rect.left = cursor;
-                    rect.right = left;
-                } else {
-                    rect.top = cursor;
-                    rect.bottom = left;
-                }
-                gaps.push(rect);
-            }
-            cursor = cursor.max(right);
-        }
-        gaps
-    }
 }
 
 pub(super) fn cached(hwnd: HWND, bounds: RECT) -> Option<Occupancy> {
@@ -375,11 +328,6 @@ mod tests {
         for widget in [left, right] {
             assert!(expanded.overlaps(widget));
         }
-        let gaps = sample.free_slots(left);
-        assert_eq!(
-            gaps,
-            [rect(0, 1032, 700, 1080), rect(1220, 1032, 1920, 1080)]
-        );
     }
 
     #[test]
@@ -441,31 +389,8 @@ mod tests {
         let lower_row = rect(500, 48, 800, 96);
         assert!(!sample.overlaps(lower_row));
         assert!(sample.can_restore(lower_row, 20));
-        assert_eq!(
-            sample.free_slots(lower_row),
-            [rect(200, 0, 1300, 96), rect(1500, 0, 1920, 96)]
-        );
         assert!(sample.overlaps(rect(500, 47, 800, 95)));
         assert!(sample.can_restore(rect(1050, 0, 1250, 48), 20));
-    }
-
-    #[test]
-    fn overlapping_controls_are_merged_when_selecting_free_gaps() {
-        let sample = layout(
-            rect(-1920, 0, 0, 48),
-            vec![
-                rect(-1600, 0, -1200, 48),
-                rect(-1700, 0, -1400, 48),
-                rect(-1600, 0, -1200, 48),
-                rect(-200, 0, 0, 48),
-            ],
-        );
-        assert_eq!(
-            sample.free_slots(sample.bounds),
-            [rect(-1920, 0, -1700, 48), rect(-1200, 0, -200, 48)]
-        );
-        let full = layout(sample.bounds, vec![sample.bounds]);
-        assert!(full.free_slots(sample.bounds).is_empty());
     }
 
     #[test]
