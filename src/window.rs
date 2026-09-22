@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
@@ -425,7 +425,7 @@ fn spawn_taskbar_watchdog() {
             let Some(state) = state.as_ref() else {
                 continue;
             };
-            let shell_hosted = theme_with_placement(state, false)
+            let shell_hosted = effective_theme_from_state(state)
                 .as_ref()
                 .is_some_and(|theme| {
                     theme.surfaces.iter().any(|surface| {
