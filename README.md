@@ -5,7 +5,7 @@
 
 This is [CodeZeno](https://codezeno.com.au)'s **Claude Code Usage Monitor** — all credit for the app itself, its design, and everything it does goes to them. See the [original repository](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) for the full feature list, privacy/security details, and how it all works.
 
-This is a personal fork, currently based on their [`v2.10.23`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v2.10.23) release, with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
+This is a personal fork, currently based on their [`v2.13.43`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v2.13.43) release, with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
 
 ## What's different in this fork
 
@@ -26,6 +26,8 @@ Click and drag the widget itself — it moves live along the taskbar and saves t
 This fork's default already leaves room for the Windows 11 Widgets button, so most people won't need to touch this at all.
 
 ## Diagnostics
+
+If a provider shows an error, check the account status under **Settings > Providers > Accounts** (now that this fork also carries upstream's multi-account support — see below). Missing credentials, expired or rejected logins, network failures, HTTP errors, and unexpected usage responses have distinct messages. Sign in again using the Claude desktop app or the CLI that owns the affected account, then refresh the monitor. You can also open **Diagnostics** in the dashboard and enable recording to inspect or copy polling errors; logging is optional, enable it before reproducing the problem.
 
 Run diagnostics with:
 

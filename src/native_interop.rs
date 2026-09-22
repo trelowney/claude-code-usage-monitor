@@ -6,7 +6,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
-use windows::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 // Window style constants
@@ -32,6 +32,37 @@ pub const WM_APP_SETTINGS_UPDATED: u32 = WM_APP + 5;
 pub const WM_APP_REFRESH_NOW: u32 = WM_APP + 6;
 pub const WM_APP_QUIT: u32 = WM_APP + 7;
 pub const WM_APP_OPEN_DASHBOARD: u32 = WM_APP + 8;
+pub const WM_APP_TRAY_DISPATCH: u32 = WM_APP + 9;
+pub const WM_APP_TASKBAR_COLLISION: u32 = WM_APP + 10;
+pub const WM_APP_ENABLE_DIAGNOSTICS: u32 = WM_APP + 11;
+pub const WM_APP_DISABLE_DIAGNOSTICS: u32 = WM_APP + 12;
+pub const WM_APP_UPDATE_ACTION: u32 = WM_APP + 13;
+pub const WM_APP_CHECK_FOR_UPDATES: u32 = WM_APP + 14;
+
+pub fn is_taskbar_horizontal(rect: RECT) -> bool {
+    (rect.right - rect.left) >= (rect.bottom - rect.top)
+}
+
+/// Open web links without depending on eframe's optional `links` feature.
+/// Use the same scheme restriction for dashboard and user-authored links.
+pub fn open_web_url(owner: Option<HWND>, url: &str) -> bool {
+    if !crate::context_menu::supported_url(url) || url.contains('\0') {
+        return false;
+    }
+    let operation = wide_str("open");
+    let target = wide_str(url.trim());
+    let result = unsafe {
+        ShellExecuteW(
+            owner,
+            PCWSTR::from_raw(operation.as_ptr()),
+            PCWSTR::from_raw(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    result.0 as isize > 32
+}
 
 static DESKTOP_HOST: Mutex<Option<(isize, isize)>> = Mutex::new(None);
 
@@ -98,7 +129,7 @@ pub fn find_taskbars() -> Vec<TaskbarWindow> {
         if len > 0 {
             let class_name = String::from_utf16_lossy(&class_name[..len as usize]);
             if class_name == "Shell_TrayWnd" || class_name == "Shell_SecondaryTrayWnd" {
-                if let Some(rect) = get_taskbar_rect(hwnd).or_else(|| get_window_rect_safe(hwnd)) {
+                if let Some(rect) = get_taskbar_rect(hwnd) {
                     taskbars.push(TaskbarWindow { hwnd, rect });
                 }
             }
@@ -137,29 +168,13 @@ pub fn find_child_window(parent: HWND, class_name: &str) -> Option<HWND> {
     }
 }
 
-/// Get taskbar position via SHAppBarMessage
+/// Get taskbar position safely.
+/// We use get_window_rect_safe directly because GetWindowRect is a non-blocking
+/// kernel-mode query that returns immediately even if explorer.exe is hung or unresponsive.
+/// SHAppBarMessage sends a synchronous LPC message to explorer.exe's UI message loop,
+/// which deadlocks the monitor thread if Explorer hangs (Event 1002).
 pub fn get_taskbar_rect(taskbar_hwnd: HWND) -> Option<RECT> {
-    unsafe {
-        let mut class_name = [0u16; 64];
-        let len = GetClassNameW(taskbar_hwnd, &mut class_name);
-        if len > 0 {
-            let class_name = String::from_utf16_lossy(&class_name[..len as usize]);
-            if class_name == "Shell_SecondaryTrayWnd" {
-                return get_window_rect_safe(taskbar_hwnd);
-            }
-        }
-
-        let mut abd = APPBARDATA {
-            cbSize: std::mem::size_of::<APPBARDATA>() as u32,
-            hWnd: taskbar_hwnd,
-            ..Default::default()
-        };
-        let result = SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd);
-        if result == 0 {
-            return None;
-        }
-        Some(abd.rc)
-    }
+    get_window_rect_safe(taskbar_hwnd)
 }
 
 /// Get the bounding rectangle of a window
@@ -202,6 +217,18 @@ pub fn embed_as_child(hwnd: HWND, parent: HWND) {
 
         if current_parent != Some(parent) {
             let _ = SetParent(hwnd, Some(parent));
+            // Windows 11 can leave a reparented layered surface beneath the
+            // taskbar's DirectComposition visual. Rebind it once after a
+            // successful parent change, never during routine positioning.
+            // Desktop DirectComposition windows are not layered and must stay
+            // that way. Callers present fresh pixels after positioning.
+            if GetParent(hwnd).ok() == Some(parent) {
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                if ex_style & WS_EX_LAYERED.0 as i32 != 0 {
+                    let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
+                    let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style);
+                }
+            }
         }
         let _ = SetWindowPos(
             hwnd,
@@ -219,9 +246,37 @@ pub fn embed_as_child(hwnd: HWND, parent: HWND) {
 pub fn make_popup(hwnd: HWND, topmost: bool) {
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let detaching = style & WS_CHILD_STYLE != 0;
+        let screen_rect = if detaching {
+            let Some(rect) = get_window_rect_safe(hwnd) else {
+                return;
+            };
+            Some(rect)
+        } else {
+            None
+        };
+        let restore_visibility = detaching && style & WS_VISIBLE.0 != 0;
+        if restore_visibility {
+            // SetParent temporarily leaves the old client coordinates in place.
+            // Do not expose that intermediate position to the compositor.
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        // SetParent's documented child-to-desktop order: detach first, then
+        // clear WS_CHILD. Read the style again so hiding stays in effect.
+        if detaching {
+            let _ = SetParent(hwnd, None);
+        }
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
         let new_style = (style & !WS_CHILD_STYLE & !WS_CLIPSIBLINGS_STYLE) | WS_POPUP_STYLE;
         let _ = SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-        let _ = SetParent(hwnd, None);
 
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let ex_style = if topmost {
@@ -230,6 +285,16 @@ pub fn make_popup(hwnd: HWND, topmost: bool) {
             ex_style & !(WS_EX_TOPMOST.0 as i32)
         };
         let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style);
+        let mut flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+        let (x, y) = if let Some(rect) = screen_rect {
+            (rect.left, rect.top)
+        } else {
+            flags |= SWP_NOMOVE;
+            (0, 0)
+        };
+        if restore_visibility {
+            flags |= SWP_SHOWWINDOW;
+        }
         let _ = SetWindowPos(
             hwnd,
             Some(if topmost {
@@ -237,11 +302,11 @@ pub fn make_popup(hwnd: HWND, topmost: bool) {
             } else {
                 HWND_NOTOPMOST
             }),
+            x,
+            y,
             0,
             0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            flags,
         );
     }
 }
@@ -369,3 +434,6 @@ pub fn move_window(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
 pub fn wide_str(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
+
+#[cfg(test)]
+mod tests;

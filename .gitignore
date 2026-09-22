@@ -30,3 +30,4 @@ NOTES.md
 
 # Local WinGet manifest generation output
 /manifests/
+test_bin/

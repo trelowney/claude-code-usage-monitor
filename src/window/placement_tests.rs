@@ -113,3 +113,45 @@ fn fullscreen_bounds_cover_the_monitor_but_maximized_work_area_does_not() {
         monitor,
     ));
 }
+
+#[test]
+fn drag_release_snapshots_state_before_reentrant_capture_change() {
+    use message_loop::{release_drag_capture_with, DragRelease};
+    use std::cell::{Cell, RefCell};
+
+    for original in [
+        DragRelease {
+            dragging: true,
+            candidate: false,
+        },
+        DragRelease {
+            dragging: false,
+            candidate: true,
+        },
+        DragRelease::default(),
+    ] {
+        let live = RefCell::new(original);
+        let release_calls = Cell::new(0);
+        let result = release_drag_capture_with(
+            || {
+                let mut state = live.borrow_mut();
+                let DragRelease { dragging, candidate } = &mut *state;
+                DragRelease::take(dragging, candidate)
+            },
+            || {
+                // ReleaseCapture can synchronously re-enter the window procedure.
+                // Reborrow also proves the snapshot's guard has been dropped.
+                assert_eq!(*live.borrow(), DragRelease::default());
+                *live.borrow_mut() = DragRelease::default();
+                release_calls.set(release_calls.get() + 1);
+            },
+        );
+        assert_eq!(
+            result, original,
+            "capture change must not erase the drop/click"
+        );
+        assert_eq!(*live.borrow(), DragRelease::default());
+        assert_eq!(release_calls.get(), 1);
+    }
+}
+

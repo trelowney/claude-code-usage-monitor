@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "claude-usage-monitor-trelowney"
-version = "2.10.23-trelowney.1"
+version = "2.13.43-trelowney.1"
 dependencies = [
  "dirs",
  "eframe",

@@ -1,6 +1,15 @@
 use super::*;
 
 pub(super) fn position_at_taskbar() {
+    let should_skip = {
+        let state = lock_state();
+        state
+            .as_ref()
+            .is_some_and(|s| s.dragging || s.collision_popped)
+    };
+    if should_skip {
+        return;
+    }
     refresh_dpi();
     let custom_position = {
         let state = lock_state();
@@ -112,11 +121,12 @@ pub(super) fn position_at_taskbar() {
     }
 }
 
-pub(super) fn reset_layered_window(hwnd: HWND) {
+pub(super) fn ensure_layered_window(hwnd: HWND) {
     unsafe {
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
-        let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as i32);
+        if ex_style & WS_EX_LAYERED.0 as i32 == 0 {
+            let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as i32);
+        }
     }
 }
 
@@ -142,10 +152,10 @@ pub(super) fn render_custom_window(
     let width = rendered.width as i32;
     let height = rendered.height as i32;
     unsafe {
-        // SetLayeredWindowAttributes and UpdateLayeredWindow cannot be used on
-        // the same layered-style lifetime. Reset it in case this surface was
-        // previously hosted on the desktop.
-        reset_layered_window(hwnd);
+        // Keep the DWM surface alive across frames. Desktop rendering uses a
+        // separate DirectComposition window, so no layered-style reset is
+        // needed here; reparenting resets it once in embed_as_child instead.
+        ensure_layered_window(hwnd);
         // UpdateLayeredWindow expects a screen-compatible destination DC. A
         // window DC happened to work for taskbar-hosted children, but desktop
         // WorkerW/DefView composition can discard the resulting surface.
@@ -222,6 +232,13 @@ pub(super) fn position_custom_theme(hwnd: HWND, theme: &ThemeDocument, scale: f6
 }
 
 pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, scale: f64) {
+    let is_dragging = {
+        let state = lock_state();
+        state.as_ref().is_some_and(|s| s.dragging)
+    };
+    if is_dragging {
+        return;
+    }
     let taskbars = native_interop::find_taskbars();
     let displays = native_interop::find_monitors();
     let display_index = theme.placement.reference.display;
@@ -235,45 +252,21 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
     let taskbar = taskbars.iter().find(|taskbar| unsafe {
         MonitorFromWindow(taskbar.hwnd, MONITOR_DEFAULTTOPRIMARY) == display.handle
     });
-    let reference = match theme.placement.reference.region {
-        ReferenceRegion::Monitor => display.rect,
-        ReferenceRegion::Taskbar => taskbar.map(|taskbar| taskbar.rect).unwrap_or(display.rect),
-        ReferenceRegion::SystemTray => taskbar
-            .and_then(|taskbar| {
-                native_interop::find_child_window(taskbar.hwnd, "TrayNotifyWnd")
-                    .and_then(native_interop::get_window_rect_safe)
-                    .or(Some(taskbar.rect))
-            })
-            .unwrap_or(display.rect),
-    };
     let width = scaled_theme_dimension(theme.canvas.width.max(1), scale);
     let height = scaled_theme_dimension(theme.canvas.height.max(1), scale);
-    let reference_width = reference.right - reference.left;
-    let reference_height = reference.bottom - reference.top;
-    let surface_horizontal = theme
-        .placement
-        .surface_horizontal
-        .unwrap_or(theme.placement.horizontal);
-    let surface_vertical = theme
-        .placement
-        .surface_vertical
-        .unwrap_or(theme.placement.vertical);
-    let x = aligned_origin(
-        reference.left,
-        reference_width,
+    let tray = taskbar
+        .and_then(|tb| native_interop::find_child_window(tb.hwnd, "TrayNotifyWnd"))
+        .and_then(native_interop::get_window_rect_safe);
+    let rect = surface_screen_rect(
+        &theme.placement,
         width,
-        horizontal_anchor_factor(theme.placement.horizontal),
-        horizontal_anchor_factor(surface_horizontal),
-        (theme.placement.offset_x as f64 * scale).round() as i32,
-    );
-    let y = aligned_origin(
-        reference.top,
-        reference_height,
         height,
-        vertical_anchor_factor(theme.placement.vertical),
-        vertical_anchor_factor(surface_vertical),
-        (theme.placement.offset_y as f64 * scale).round() as i32,
+        scale,
+        display.rect,
+        taskbar.map(|tb| tb.rect),
+        tray,
     );
+    let (x, y) = (rect.left, rect.top);
     let nest = theme
         .placement
         .nest
@@ -515,3 +508,107 @@ pub(super) fn compute_anchor_y(anchor_top: i32, anchor_height: i32, widget_heigh
     (anchor_bottom - widget_height).max(anchor_top)
 }
 
+pub(super) struct WidgetFrame {
+    pub width: i32,
+    pub height: i32,
+    pub content_width: i32,
+    pub inset: i32,
+}
+
+pub(super) fn widget_frame(
+    theme: &ThemeDocument,
+    data: Option<&AppUsageData>,
+    runtime: ThemeRuntime,
+    scale: f64,
+) -> WidgetFrame {
+    let (content_width, height) =
+        theme_engine::resolve_surface_content_size(theme, 0, data, runtime);
+    let inset = theme_engine::surface_horizontal_padding(theme, 0, runtime);
+    WidgetFrame {
+        width: scaled_theme_dimension(content_width + 2 * inset, scale),
+        height: scaled_theme_dimension(height, scale),
+        content_width: scaled_theme_dimension(content_width, scale),
+        inset: (inset as f64 * scale).round() as i32,
+    }
+}
+
+pub(super) fn override_primary_placement(
+    theme: &mut ThemeDocument,
+    placement: theme_engine::Placement,
+) {
+    theme.placement = placement.clone();
+    if let Some(surface) = theme.surfaces.first_mut() {
+        surface.placement = placement;
+    }
+}
+
+pub(super) fn floating_placement(display: usize) -> theme_engine::Placement {
+    theme_engine::Placement {
+        reference: theme_engine::ReferenceTarget {
+            region: ReferenceRegion::Monitor,
+            display,
+        },
+        nest: SurfaceNest::Floating,
+        horizontal: HorizontalAnchor::Left,
+        vertical: VerticalAnchor::Top,
+        surface_horizontal: Some(HorizontalAnchor::Left),
+        surface_vertical: Some(VerticalAnchor::Top),
+        ..Default::default()
+    }
+}
+
+pub(super) fn system_tray_reference(taskbar: RECT, tray: Option<RECT>) -> RECT {
+    tray.unwrap_or_else(|| {
+        if native_interop::is_taskbar_horizontal(taskbar) {
+            RECT {
+                left: taskbar.right,
+                ..taskbar
+            }
+        } else {
+            RECT {
+                top: taskbar.bottom,
+                ..taskbar
+            }
+        }
+    })
+}
+
+pub(super) fn surface_screen_rect(
+    placement: &theme_engine::Placement,
+    width: i32,
+    height: i32,
+    scale: f64,
+    monitor: RECT,
+    taskbar: Option<RECT>,
+    tray: Option<RECT>,
+) -> RECT {
+    let reference = match placement.reference.region {
+        ReferenceRegion::Monitor => monitor,
+        ReferenceRegion::Taskbar => taskbar.unwrap_or(monitor),
+        ReferenceRegion::SystemTray => taskbar
+            .map(|tb| system_tray_reference(tb, tray))
+            .unwrap_or(monitor),
+    };
+    let x = aligned_origin(
+        reference.left,
+        reference.right - reference.left,
+        width,
+        horizontal_anchor_factor(placement.horizontal),
+        horizontal_anchor_factor(placement.surface_horizontal.unwrap_or(placement.horizontal)),
+        (placement.offset_x as f64 * scale).round() as i32,
+    );
+    let y = aligned_origin(
+        reference.top,
+        reference.bottom - reference.top,
+        height,
+        vertical_anchor_factor(placement.vertical),
+        vertical_anchor_factor(placement.surface_vertical.unwrap_or(placement.vertical)),
+        (placement.offset_y as f64 * scale).round() as i32,
+    );
+    RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    }
+}

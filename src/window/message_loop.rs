@@ -1,5 +1,31 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DragRelease {
+    pub dragging: bool,
+    pub candidate: bool,
+}
+
+impl DragRelease {
+    pub fn take(dragging: &mut bool, candidate: &mut bool) -> Self {
+        Self {
+            dragging: std::mem::take(dragging),
+            candidate: std::mem::take(candidate),
+        }
+    }
+}
+
+pub(super) fn release_drag_capture_with(
+    take_drag: impl FnOnce() -> DragRelease,
+    release_capture: impl FnOnce(),
+) -> DragRelease {
+    // The snapshot and STATE guard must be finished before ReleaseCapture can
+    // synchronously re-enter WM_CAPTURECHANGED and clear the live drag state.
+    let released = take_drag();
+    release_capture();
+    released
+}
+
 /// Main window procedure
 pub(super) unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
@@ -36,37 +62,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
             let timer_id = wparam.0;
             match timer_id {
                 TIMER_POLL => {
-                    let auth_watch = {
-                        let state = lock_state();
-                        state.as_ref().map(|s| {
-                            (
-                                s.auth_error_paused_polling,
-                                s.auth_watch_mode,
-                                s.auth_watch_snapshot.clone(),
-                            )
-                        })
-                    };
-                    match auth_watch {
-                        Some((true, watch_mode, previous_snapshot)) => {
-                            let current_snapshot = poller::credential_watch_snapshot(watch_mode);
-                            if current_snapshot != previous_snapshot {
-                                let mut state = lock_state();
-                                if let Some(s) = state.as_mut() {
-                                    if s.auth_error_paused_polling
-                                        && s.auth_watch_mode == watch_mode
-                                    {
-                                        s.auth_watch_snapshot = current_snapshot;
-                                    }
-                                }
-                                drop(state);
-                                request_poll(hwnd);
-                            }
-                        }
-                        Some((false, _, _)) => {
-                            request_scheduled_poll(hwnd);
-                        }
-                        None => {}
-                    }
+                    // Credential discovery can launch WSL and decrypt local
+                    // caches. The poll worker also handles the paused state.
+                    request_scheduled_poll(hwnd);
                 }
                 TIMER_COUNTDOWN => {
                     render_layered();
@@ -135,7 +133,20 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_APP_REFRESH_NOW => {
+            diagnose::log("Refresh now received by monitor");
+            if let Some(state) = lock_state().as_mut() {
+                state.force_notify_auth_error = true;
+            }
             request_poll(hwnd);
+            LRESULT(0)
+        }
+        WM_APP_ENABLE_DIAGNOSTICS => {
+            let _ = diagnose::init_append();
+            diagnose::log("monitor diagnostics connected to dashboard");
+            LRESULT(0)
+        }
+        WM_APP_DISABLE_DIAGNOSTICS => {
+            diagnose::disable();
             LRESULT(0)
         }
         WM_APP_OPEN_DASHBOARD => {
@@ -144,6 +155,14 @@ pub(super) unsafe extern "system" fn wnd_proc(
         }
         WM_APP_QUIT => {
             let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        native_interop::WM_APP_UPDATE_ACTION => {
+            perform_update_action(hwnd);
+            LRESULT(0)
+        }
+        native_interop::WM_APP_CHECK_FOR_UPDATES => {
+            begin_update_check(hwnd, true);
             LRESULT(0)
         }
         WM_APP_UPDATE_CHECK_COMPLETE => {
@@ -223,6 +242,17 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let released = release_drag_capture_with(
+                || {
+                    lock_state()
+                        .as_mut()
+                        .map(|s| DragRelease::take(&mut s.dragging, &mut s.drag_candidate))
+                        .unwrap_or_default()
+                },
+                || {
+                    let _ = ReleaseCapture();
+                },
+            );
             let suppressed = {
                 let mut state = lock_state();
                 state.as_mut().is_some_and(|state| {
@@ -234,27 +264,87 @@ pub(super) unsafe extern "system" fn wnd_proc(
             if suppressed {
                 return LRESULT(0);
             }
-            let (was_dragging, was_candidate) = {
-                let mut state = lock_state();
-                match state.as_mut() {
-                    Some(s) => {
-                        let result = (s.dragging, s.drag_candidate);
-                        s.dragging = false;
-                        s.drag_candidate = false;
-                        result
-                    }
-                    None => (false, false),
-                }
-            };
-            if was_dragging || was_candidate {
-                let _ = ReleaseCapture();
-            }
-            if was_dragging {
+            if released.dragging {
                 finalize_drag_persist();
                 return LRESULT(0);
             }
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 schedule_or_dispatch_click(hwnd, surface, object);
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            let mut state = lock_state();
+            if let Some(s) = state.as_mut() {
+                s.dragging = false;
+                s.drag_candidate = false;
+            }
+            LRESULT(0)
+        }
+        // Not an upstream feature: on real Windows 11 taskbars our left-dock
+        // spot is out of reach of the centred app-icon cluster, but a
+        // left-aligned taskbar full of pinned/running apps can still collide
+        // with it. Detected in `spawn_taskbar_watchdog`; reuses upstream's
+        // `taskbar_collision` occupancy engine, but instead of their full
+        // free-floating "auto-eject" card, this just pops the widget above
+        // its own normal dock spot (same X) until the collision clears, then
+        // re-embeds it exactly where it was.
+        WM_APP_TASKBAR_COLLISION => {
+            let action = wparam.0;
+            let mut state = lock_state();
+            let Some(s) = state.as_mut() else {
+                return LRESULT(0);
+            };
+            if s.dragging || s.drag_candidate {
+                return LRESULT(0);
+            }
+            if action == 1 && !s.collision_popped && s.embedded {
+                let widget_rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
+                let taskbar_rect = s
+                    .taskbar_hwnd
+                    .and_then(|h| native_interop::get_window_rect_safe(h.to_hwnd()))
+                    .unwrap_or(widget_rect);
+                let widget_w = widget_rect.right - widget_rect.left;
+                let widget_h = widget_rect.bottom - widget_rect.top;
+                let displays = native_interop::find_monitors();
+                let monitor_top = displays
+                    .iter()
+                    .find(|d| {
+                        taskbar_rect.left >= d.rect.left
+                            && taskbar_rect.right <= d.rect.right
+                            && taskbar_rect.top >= d.rect.top
+                            && taskbar_rect.bottom <= d.rect.bottom
+                    })
+                    .map(|d| d.rect.top)
+                    .unwrap_or(0);
+                let x = widget_rect.left;
+                let y = (taskbar_rect.top - widget_h).max(monitor_top);
+                s.collision_popped = true;
+                drop(state);
+                native_interop::make_popup(hwnd, true);
+                unsafe {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOPMOST),
+                        x,
+                        y,
+                        widget_w,
+                        widget_h,
+                        SWP_NOACTIVATE,
+                    );
+                }
+                diagnose::log("taskbar collision: popped widget above its dock spot");
+                render_layered();
+            } else if action == 0 && s.collision_popped {
+                s.collision_popped = false;
+                let taskbar_hwnd = s.taskbar_hwnd.map(|h| h.to_hwnd());
+                drop(state);
+                if let Some(tb) = taskbar_hwnd {
+                    native_interop::embed_as_child(hwnd, tb);
+                }
+                diagnose::log("taskbar collision resolved: re-docked widget to taskbar");
+                position_at_taskbar();
+                render_layered();
             }
             LRESULT(0)
         }
@@ -274,38 +364,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     render_layered();
                     request_poll(hwnd);
                 }
-                IDM_VERSION_ACTION => {
-                    let (install_channel, release) = {
-                        let state = lock_state();
-                        match state.as_ref() {
-                            Some(s) => (
-                                s.install_channel,
-                                match &s.update_status {
-                                    UpdateStatus::Available(release) => Some(release.clone()),
-                                    _ => None,
-                                },
-                            ),
-                            None => (InstallChannel::Portable, None),
-                        }
-                    };
-
-                    match install_channel {
-                        InstallChannel::Winget => {
-                            if release.is_some() {
-                                begin_winget_update(hwnd);
-                            } else {
-                                begin_update_check(hwnd, true);
-                            }
-                        }
-                        InstallChannel::Portable => {
-                            if let Some(release) = release {
-                                begin_update_apply(hwnd, release);
-                            } else {
-                                begin_update_check(hwnd, true);
-                            }
-                        }
-                    }
-                }
+                IDM_VERSION_ACTION => perform_update_action(hwnd),
                 2 => {
                     crate::dashboard::close_existing();
                     let _ = DestroyWindow(hwnd);
@@ -366,6 +425,20 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         _ if msg == WM_APP_TRAY => {
+            // Explorer can deliver this synchronously, including while a shell
+            // call has re-entered our window procedure. Return before taking
+            // STATE, opening windows, or calling back into Explorer.
+            if let Err(error) = PostMessageW(
+                Some(hwnd),
+                native_interop::WM_APP_TRAY_DISPATCH,
+                wparam,
+                lparam,
+            ) {
+                diagnose::log_error("unable to queue tray callback", error);
+            }
+            LRESULT(0)
+        }
+        _ if msg == native_interop::WM_APP_TRAY_DISPATCH => {
             let tray_message = lparam.0 as u32;
             if let Some(surface_index) = tray_icon::themed_surface_index(wparam.0 as u32) {
                 let root_id = lock_state().as_ref().and_then(|state| {
@@ -448,6 +521,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             // and tray-icon-only themes keep their owner HWND, so restore the
             // registrations when the shell broadcasts its return.
             sync_tray_icon(hwnd);
+            render_layered();
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -468,5 +542,79 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_callbacks_return_while_state_is_locked_and_preserve_events() {
+        // Model a shell call re-entering wnd_proc while the monitor owns STATE.
+        // Keep the lock on this thread so a regression fails with a timeout
+        // instead of permanently deadlocking the test process.
+        let state = lock_state();
+        let (completed, completion) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || unsafe {
+            let class = native_interop::wide_str("STATIC");
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                PCWSTR::from_raw(class.as_ptr()),
+                PCWSTR::null(),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+            .expect("create isolated message-only test window");
+
+            // Start with a themed hover: the old handler tries to acquire STATE
+            // here. No dashboard or menu should ever be opened by this test.
+            let events = [
+                (1_000, WM_MOUSEMOVE),
+                (1_042, WM_LBUTTONUP),
+                (1_042, WM_LBUTTONDBLCLK),
+                (1_042, WM_RBUTTONUP),
+                (1, WM_LBUTTONUP),
+                (1, WM_LBUTTONDBLCLK),
+                (1, WM_RBUTTONUP),
+                (1, WM_CONTEXTMENU),
+            ];
+            for (id, event) in events {
+                assert_eq!(
+                    wnd_proc(hwnd, WM_APP_TRAY, WPARAM(id), LPARAM(event as isize)).0,
+                    0
+                );
+                let mut queued = MSG::default();
+                let found = PeekMessageW(
+                    &mut queued,
+                    Some(hwnd),
+                    native_interop::WM_APP_TRAY_DISPATCH,
+                    native_interop::WM_APP_TRAY_DISPATCH,
+                    PM_REMOVE,
+                )
+                .as_bool();
+                if !found {
+                    let _ = DestroyWindow(hwnd);
+                    panic!("tray callback was processed inline instead of queued");
+                }
+                assert_eq!(queued.hwnd, hwnd);
+                assert_eq!(queued.wParam.0, id);
+                assert_eq!(queued.lParam.0, event as isize);
+            }
+            let _ = DestroyWindow(hwnd);
+            completed.send(()).unwrap();
+        });
+
+        let result = completion.recv_timeout(Duration::from_secs(5));
+        drop(state);
+        worker.join().expect("tray callback test thread");
+        result.expect("tray callbacks must return without waiting for STATE");
     }
 }

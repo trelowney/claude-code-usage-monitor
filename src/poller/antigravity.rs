@@ -168,6 +168,7 @@ pub(super) fn fetch_antigravity_usage_from_endpoint(
     let weekly = UsageSection::default();
 
     Ok(UsageData {
+        limits: Vec::new(),
         session,
         weekly,
         weekly_label: None,
@@ -313,6 +314,7 @@ pub(super) fn fetch_antigravity_quota_summary(
 pub(super) fn antigravity_section_from_quota(quota: AntigravityQuotaInfo) -> Option<UsageSection> {
     let remaining = quota.remaining_fraction?.clamp(0.0, 1.0);
     Some(UsageSection {
+        available: true,
         percentage: (1.0 - remaining) * 100.0,
         resets_at: parse_iso8601(quota.reset_time.as_deref()),
     })
@@ -323,6 +325,7 @@ pub(super) fn antigravity_section_from_summary_bucket(
 ) -> Option<UsageSection> {
     let remaining = bucket.remaining_fraction?.clamp(0.0, 1.0);
     Some(UsageSection {
+        available: true,
         percentage: (1.0 - remaining) * 100.0,
         resets_at: parse_iso8601(bucket.reset_time.as_deref()),
     })
