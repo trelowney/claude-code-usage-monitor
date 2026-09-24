@@ -86,6 +86,10 @@ struct AppState {
     last_poll_failure: Option<poller::PollFailure>,
     update_status: UpdateStatus,
     last_update_check_unix: Option<u64>,
+    /// Release the user chose to skip from the update prompt (persisted).
+    skipped_update_version: Option<String>,
+    /// Release the user answered "Not now" for; asks again on the next start.
+    deferred_update_version: Option<String>,
 
     taskbar_index: usize,
     tray_offset: i32,
@@ -642,6 +646,7 @@ fn save_state_settings() {
             .language_override
             .map(|language| language.code().to_string());
         persisted.last_update_check_unix = s.last_update_check_unix;
+        persisted.skipped_update_version = s.skipped_update_version.clone();
         persisted.set_enabled_providers(s.providers);
         persisted.custom_theme_enabled = s.custom_theme_enabled;
         persisted.active_theme_path = s
@@ -975,6 +980,20 @@ fn update_check_interval() -> Duration {
     Duration::from_secs(24 * 60 * 60)
 }
 
+/// A failed background check (e.g. no network yet right after login) is
+/// retried after this delay instead of waiting a full day.
+const UPDATE_RETRY_AFTER_ERROR: Duration = Duration::from_secs(15 * 60);
+
+/// Back-dates the recorded check so the next one is due after
+/// `UPDATE_RETRY_AFTER_ERROR` rather than a whole interval.
+fn retry_soon_timestamp(checked_at: u64) -> u64 {
+    checked_at.saturating_sub(
+        update_check_interval()
+            .saturating_sub(UPDATE_RETRY_AFTER_ERROR)
+            .as_secs(),
+    )
+}
+
 fn auto_update_check_due(last_update_check_unix: Option<u64>) -> bool {
     let Some(last_update_check_unix) = last_update_check_unix else {
         return true;
@@ -1037,23 +1056,6 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
             PCWSTR::from_raw(title_wide.as_ptr()),
             MB_OK | MB_ICONERROR,
         );
-    }
-}
-
-fn show_update_prompt(hwnd: HWND, strings: Strings, release: &ReleaseDescriptor) -> bool {
-    let message = strings
-        .update_prompt_now
-        .replace("{version}", &release.latest_version);
-
-    unsafe {
-        let title_wide = native_interop::wide_str(strings.update_available);
-        let message_wide = native_interop::wide_str(&message);
-        MessageBoxW(
-            Some(hwnd),
-            PCWSTR::from_raw(message_wide.as_ptr()),
-            PCWSTR::from_raw(title_wide.as_ptr()),
-            MB_YESNO | MB_ICONQUESTION,
-        ) == IDYES
     }
 }
 
@@ -1144,11 +1146,29 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     }
                 }
                 save_state_settings();
-                if interactive && show_update_prompt(hwnd, strings, &release) {
-                    match install_channel {
+                let prompt = lock_state().as_ref().is_some_and(|s| {
+                    should_prompt(
+                        interactive,
+                        &release.latest_version,
+                        s.skipped_update_version.as_deref(),
+                        s.deferred_update_version.as_deref(),
+                    )
+                });
+                match prompt
+                    .then(|| show_update_prompt(strings, &release))
+                    .flatten()
+                {
+                    Some(UpdateChoice::Install) => match install_channel {
                         InstallChannel::Portable => begin_update_apply(hwnd, release),
                         InstallChannel::Winget => begin_winget_update(hwnd),
+                    },
+                    Some(choice) => {
+                        if let Some(s) = lock_state().as_mut() {
+                            remember_choice(s, choice, &release.latest_version);
+                        }
+                        save_state_settings();
                     }
+                    None => {}
                 }
                 // Keep the dashboard busy until the install prompt is dismissed.
                 if let Some(state) = lock_state().as_ref() {
@@ -1168,7 +1188,11 @@ fn begin_update_check(hwnd: HWND, interactive: bool) {
                     let mut state = lock_state();
                     if let Some(s) = state.as_mut() {
                         s.update_status = UpdateStatus::Idle;
-                        s.last_update_check_unix = Some(checked_at);
+                        s.last_update_check_unix = Some(if interactive {
+                            checked_at
+                        } else {
+                            retry_soon_timestamp(checked_at)
+                        });
                         publish_update_status(s);
                     }
                 }
@@ -1985,6 +2009,8 @@ pub fn run() {
                 last_poll_failure: None,
                 update_status: UpdateStatus::Idle,
                 last_update_check_unix: settings.last_update_check_unix,
+                skipped_update_version: settings.skipped_update_version.clone(),
+                deferred_update_version: None,
                 taskbar_index: settings.taskbar_index,
                 tray_offset: settings.tray_offset,
                 drag_candidate: false,
@@ -2060,17 +2086,9 @@ pub fn run() {
             request_poll(hwnd);
         }
 
+        // Check on every start (not only once a day), so a new release is
+        // offered right away; the daily timer covers long-running sessions.
         if !no_poll {
-            schedule_auto_update_check(hwnd);
-        }
-        let should_check_updates = {
-            let state = lock_state();
-            state
-                .as_ref()
-                .map(|s| auto_update_check_due(s.last_update_check_unix))
-                .unwrap_or(false)
-        };
-        if should_check_updates && !no_poll {
             begin_update_check(hwnd, false);
         }
 
@@ -2796,6 +2814,8 @@ mod mouse;
 use mouse::*;
 mod window_context_menu;
 use window_context_menu::*;
+mod update_prompt;
+use update_prompt::{remember_choice, should_prompt, show_update_prompt, UpdateChoice};
 
 #[cfg(test)]
 mod placement_tests;

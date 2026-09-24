@@ -1,0 +1,27 @@
+name: CI (update-prompt WIP)
+
+on:
+  push:
+    branches:
+      - update-prompt
+
+env:
+  # Plain log output, so warnings can't hide behind ANSI escape codes.
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Keep in sync with rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Build (release, same as the release workflow)
+        run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked

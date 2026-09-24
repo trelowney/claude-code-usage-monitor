@@ -48,6 +48,9 @@ pub struct SettingsFile {
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_update_check_unix: Option<u64>,
+    /// Release the user chose "Skip this version" for in the update prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
     #[serde(default = "default_true")]
     show_claude_code: bool,
     #[serde(default)]
@@ -86,6 +89,7 @@ impl Default for SettingsFile {
             poll_interval_ms: default_poll_interval(),
             language: None,
             last_update_check_unix: None,
+            skipped_update_version: None,
             show_claude_code: true,
             show_codex: false,
             show_antigravity: false,
