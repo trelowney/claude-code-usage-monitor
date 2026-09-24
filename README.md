@@ -5,7 +5,7 @@
 
 This is [CodeZeno](https://codezeno.com.au)'s **Claude Code Usage Monitor** — all credit for the app itself, its design, and everything it does goes to them. See the [original repository](https://github.com/CodeZeno/Claude-Code-Usage-Monitor) for the full feature list, privacy/security details, and how it all works.
 
-This is a personal fork, currently based on their [`v2.13.43`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v2.13.43) release, with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
+This is a personal fork, currently based on their [`v2.15.14`](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/tag/v2.15.14) release, with a handful of personal tweaks on top. Version numbers here follow `<upstream version>-trelowney.<build>`, so it's always clear which upstream release a build is based on — check upstream's [latest release](https://github.com/CodeZeno/Claude-Code-Usage-Monitor/releases/latest) to see if they've moved on since then.
 
 ## What's different in this fork
 
@@ -14,10 +14,10 @@ This is a personal fork, currently based on their [`v2.13.43`](https://github.co
 - **No tray icons anywhere** — neither the always-on app icon upstream shows by default, nor the per-model percentage badge icons the Classic theme would otherwise put in the notification area. The widget itself already shows the same numbers. (Theme Studio's own opt-in "show this layer as a tray icon" feature still works if you build a custom theme that asks for it — this fork just doesn't turn it on by default.) The "Show widget" menu toggle is also removed, since hiding the only surface with no tray icon to fall back on would leave no way to right-click it again.
 - **Usage bar segments turn red above 80%** for every window (5-hour/7-day, or Cursor's Auto/API, or OpenCode's dynamic weekly/monthly window), for every enabled provider.
 - **Toast notifications** (Action Center, bottom-right) for: auth/credential errors, and — for Claude Code, Codex, and Antigravity specifically — a session or weekly window resetting after being above 50%, and a window crossing 80% usage. (Cursor and OpenCode don't get the reset/80% toasts: their "session"/"weekly" fields don't represent a fixed 5-hour/7-day window the same way, so the wording would be misleading.)
-- **Auto-updater points at [this repo's releases](https://github.com/trelowney/claude-code-usage-monitor/releases)** instead of upstream's, so it won't ever offer to replace this build with upstream's unmodified one.
+- **Auto-updater points at [this repo's releases](https://github.com/trelowney/claude-code-usage-monitor/releases)** instead of upstream's, so it won't ever offer to replace this build with upstream's unmodified one. It keeps upstream's download safeguards (every update must match the size and SHA-256 digest GitHub publishes for the release asset) but understands this fork's `-trelowney.N` version tags.
 - Rebranded binary/window title/menu/Dashboard & Theme Studio window so it's obvious this is the custom build, not upstream.
 
-Everything else — Cursor and OpenCode Go support, the Dashboard, Theme Studio, credentials handling, WSL support, and so on — is unchanged from upstream. Download the latest `claude-usage-monitor-trelowney.exe` from this repo's [Releases](https://github.com/trelowney/claude-code-usage-monitor/releases) page and run it directly; it's portable, no installer.
+Everything else — Cursor, OpenCode Go and Grok Build support, the Dashboard, Theme Studio, credentials handling, WSL support, and so on — is unchanged from upstream. Download the latest `claude-usage-monitor-trelowney.exe` from this repo's [Releases](https://github.com/trelowney/claude-code-usage-monitor/releases) page and run it directly; it's portable, no installer.
 
 ## Repositioning the widget
 

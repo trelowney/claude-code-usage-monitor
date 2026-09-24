@@ -280,7 +280,11 @@ mod claude;
 mod claude_desktop;
 mod codex;
 mod cursor;
+mod grok;
 mod opencode;
+mod retry_after;
+
+pub use retry_after::retry_delay_ms;
 
 struct ProviderPoller {
     id: ProviderId,
@@ -288,7 +292,7 @@ struct ProviderPoller {
     credential_watch: fn(bool) -> CredentialWatchSnapshot,
 }
 
-const PROVIDER_POLLERS: [ProviderPoller; 5] = [
+const PROVIDER_POLLERS: [ProviderPoller; 6] = [
     ProviderPoller {
         id: ProviderId::Claude,
         poll: claude::poll_claude_code,
@@ -313,6 +317,11 @@ const PROVIDER_POLLERS: [ProviderPoller; 5] = [
         id: ProviderId::Cursor,
         poll: cursor::poll_cursor,
         credential_watch: cursor::credential_watch_snapshot,
+    },
+    ProviderPoller {
+        id: ProviderId::Grok,
+        poll: grok::poll_grok,
+        credential_watch: grok::credential_watch_snapshot,
     },
 ];
 
@@ -356,6 +365,9 @@ fn build_agent() -> Result<ureq::Agent, PollError> {
             Ok(ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(30)))
                 .tls_config(tls)
+                // Inspect Retry-After before converting error statuses below.
+                .http_status_as_error(false)
+                .middleware(retry_after::middleware)
                 .build()
                 .into())
         })
@@ -363,6 +375,15 @@ fn build_agent() -> Result<ureq::Agent, PollError> {
 }
 
 type HttpResponse = ureq::http::Response<ureq::Body>;
+
+fn check_http_status(response: HttpResponse) -> Result<HttpResponse, ureq::Error> {
+    let status = response.status();
+    if status.is_client_error() || status.is_server_error() {
+        Err(ureq::Error::StatusCode(status.as_u16()))
+    } else {
+        Ok(response)
+    }
+}
 
 fn get_header_f64(response: &HttpResponse, name: &str) -> f64 {
     response

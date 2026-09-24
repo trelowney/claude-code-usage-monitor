@@ -1987,6 +1987,308 @@
               "opacity": "1"
             }
           }
+        },
+        {
+          "id": "grok-provider",
+          "name": "Grok provider",
+          "render": "providers.grok.enabled",
+          "parent": "provider-row",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4 + 62",
+          "height": "46"
+        },
+        {
+          "id": "grok-pool-segments-dark",
+          "name": "dark Grok pool segments",
+          "render": "(system.dark) && (grok.weekly.percentage < 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.weekly.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#8B5CF6FF"
+            },
+            "track": {
+              "color": "#444444FF"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-pool-segments-dark-high",
+          "name": "dark Grok pool segments (high usage)",
+          "render": "(system.dark) && (grok.weekly.percentage >= 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.weekly.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF"
+            },
+            "track": {
+              "color": "#444444FF"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-pool-value-dark",
+          "name": "dark Grok pool value",
+          "render": "(system.dark) && !grok.credits.available",
+          "parent": "grok-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "{grok.weekly.display:usage_line}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#F5F5F5FF"
+            }
+          }
+        },
+        {
+          "id": "grok-pool-segments-light",
+          "name": "light Grok pool segments",
+          "render": "(1 - system.dark) && (grok.weekly.percentage < 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.weekly.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#7C3AEDFF"
+            },
+            "track": {
+              "color": "#AAAAAAFF"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-pool-segments-light-high",
+          "name": "light Grok pool segments (high usage)",
+          "render": "(1 - system.dark) && (grok.weekly.percentage >= 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.weekly.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF"
+            },
+            "track": {
+              "color": "#AAAAAAFF"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-pool-value-light",
+          "name": "light Grok pool value",
+          "render": "(1 - system.dark) && !grok.credits.available",
+          "parent": "grok-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "{grok.weekly.display:usage_line}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#1F1F1FFF"
+            }
+          }
+        },
+        {
+          "id": "grok-credits-segments-dark",
+          "name": "dark Grok on-demand segments",
+          "render": "((system.dark) && grok.credits.available) && (grok.credits.percentage < 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.credits.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-credits-segments-dark-high",
+          "name": "dark Grok on-demand segments (high usage)",
+          "render": "((system.dark) && grok.credits.available) && (grok.credits.percentage >= 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.credits.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-credits-value-dark",
+          "name": "dark Grok on-demand value",
+          "render": "(system.dark) && grok.credits.available",
+          "parent": "grok-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${grok.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#F5A623FF",
+              "opacity": "1"
+            }
+          }
+        },
+        {
+          "id": "grok-credits-segments-light",
+          "name": "light Grok on-demand segments",
+          "render": "((1 - system.dark) && grok.credits.available) && (grok.credits.percentage < 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.credits.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#C77700FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-credits-segments-light-high",
+          "name": "light Grok on-demand segments (high usage)",
+          "render": "((1 - system.dark) && grok.credits.available) && (grok.credits.percentage >= 80)",
+          "parent": "grok-provider",
+          "y": "28",
+          "width": "ceil(10 / max(1, providers.count)) * 11 - 1",
+          "height": "13",
+          "content": {
+            "type": "progress",
+            "value": "grok.credits.display",
+            "direction": "left_to_right",
+            "fill": {
+              "color": "#DC2626FF",
+              "opacity": "1"
+            },
+            "track": {
+              "color": "#00000000",
+              "opacity": "0"
+            },
+            "corner_radius": "2",
+            "segments": 10,
+            "segments_expression": "ceil(10 / max(1, providers.count))",
+            "segment_gap": "1"
+          }
+        },
+        {
+          "id": "grok-credits-value-light",
+          "name": "light Grok on-demand value",
+          "render": "(1 - system.dark) && grok.credits.available",
+          "parent": "grok-provider",
+          "x": "ceil(10 / max(1, providers.count)) * 11 - 1 + 4",
+          "y": "28",
+          "width": "62",
+          "height": "13",
+          "content": {
+            "type": "text",
+            "template": "${grok.credits.balance:0.00}",
+            "font_family": "Segoe UI",
+            "font_size": "12",
+            "weight": "medium",
+            "rendering": "clear_type",
+            "contrast": "1",
+            "align": "left",
+            "color": {
+              "color": "#C77700FF",
+              "opacity": "1"
+            }
+          }
         }
       ]
     }

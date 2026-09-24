@@ -1,11 +1,10 @@
 use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use serde::Deserialize;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
@@ -13,7 +12,6 @@ use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
 const GITHUB_API_ACCEPT: &str = "application/vnd.github+json";
 const GITHUB_API_VERSION: &str = "2022-11-28";
-const RELEASE_ASSET_NAME: &str = "claude-usage-monitor-trelowney.exe";
 const HELPER_EXE_NAME: &str = "updater-helper.exe";
 const DOWNLOAD_EXE_NAME: &str = "update-download.exe";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -21,16 +19,17 @@ const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 // Keep this aligned with the package identifier used in winget-pkgs.
 const WINGET_PACKAGE_ID: &str = "CodeZeno.ClaudeCodeUsageMonitor";
 
+mod download;
+mod release;
+
+use download::{download_release_asset, open_verified_source, AssetIntegrity};
+pub use release::ReleaseDescriptor;
+use release::{release_descriptor, GitHubRelease};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallChannel {
     Portable,
     Winget,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReleaseDescriptor {
-    pub latest_version: String,
-    asset_url: String,
 }
 
 #[derive(Debug)]
@@ -39,34 +38,48 @@ pub enum UpdateCheckResult {
     Available(ReleaseDescriptor),
 }
 
-#[derive(Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    assets: Vec<GitHubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GitHubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
 pub fn handle_cli_mode(args: &[String]) -> Option<i32> {
-    if args.len() == 5 && args[1] == "--apply-update" {
-        let target = PathBuf::from(&args[2]);
-        let source = PathBuf::from(&args[3]);
-        let pid = args[4].parse::<u32>().unwrap_or(0);
-
-        return Some(match apply_update(target, source, pid) {
-            Ok(()) => 0,
-            Err(error) => {
-                show_error_message("Update failed", &error);
-                1
-            }
-        });
+    if args.get(1).is_some_and(|arg| arg == "--apply-update") {
+        return Some(
+            match parse_apply_update_args(args).and_then(|(target, source, pid, integrity)| {
+                apply_update(target, source, pid, &integrity)
+            }) {
+                Ok(()) => 0,
+                Err(error) => {
+                    show_error_message("Update failed", &error);
+                    1
+                }
+            },
+        );
     }
 
     None
+}
+
+fn parse_apply_update_args(
+    args: &[String],
+) -> Result<(PathBuf, PathBuf, u32, AssetIntegrity), String> {
+    if args.len() != 7 {
+        return Err(
+            "The updater helper requires a target, source, process ID, size, and SHA-256 digest."
+                .into(),
+        );
+    }
+    let pid = args[4]
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid != 0)
+        .ok_or_else(|| "Invalid updater process ID.".to_string())?;
+    let size = args[5]
+        .parse::<u64>()
+        .map_err(|_| "Invalid update size.".to_string())?;
+    let integrity = AssetIntegrity::new(size, Some(&args[6]))?;
+    Ok((
+        PathBuf::from(&args[2]),
+        PathBuf::from(&args[3]),
+        pid,
+        integrity,
+    ))
 }
 
 pub fn current_install_channel() -> InstallChannel {
@@ -129,7 +142,7 @@ pub fn begin_self_update(release: &ReleaseDescriptor) -> Result<(), String> {
         let _ = std::fs::remove_file(&partial_download_path);
     }
 
-    download_release_asset(&release.asset_url, &partial_download_path, &download_path)?;
+    download_release_asset(release, &partial_download_path, &download_path)?;
     std::fs::copy(&current_exe, &helper_path)
         .map_err(|e| format!("Unable to prepare updater helper: {e}"))?;
 
@@ -142,6 +155,8 @@ pub fn begin_self_update(release: &ReleaseDescriptor) -> Result<(), String> {
         .arg(target)
         .arg(source)
         .arg(pid)
+        .arg(release.integrity.size_arg())
+        .arg(release.integrity.digest_arg())
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -152,17 +167,18 @@ pub fn begin_self_update(release: &ReleaseDescriptor) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_update(target: PathBuf, source: PathBuf, pid: u32) -> Result<(), String> {
-    if !source.exists() {
-        return Err(format!(
-            "Downloaded update not found at {}",
-            source.display()
-        ));
-    }
-
+fn apply_update(
+    target: PathBuf,
+    source: PathBuf,
+    pid: u32,
+    integrity: &AssetIntegrity,
+) -> Result<(), String> {
+    // Keep this handle open through replacement so the checked bytes cannot change.
+    let verified_source = open_verified_source(&source, integrity)?;
     let _ = wait_for_process_exit(pid, Duration::from_secs(30));
     replace_target_binary(&target, &source)?;
     relaunch_target(&target)?;
+    drop(verified_source);
     let _ = std::fs::remove_file(&source);
 
     Ok(())
@@ -186,73 +202,7 @@ fn fetch_latest_release() -> Result<Option<ReleaseDescriptor>, String> {
         .read_json()
         .map_err(|e| format!("Unable to parse GitHub release data: {e}"))?;
 
-    let latest_version = release.tag_name.trim_start_matches('v').to_string();
-    if !is_version_newer(&latest_version, env!("CARGO_PKG_VERSION")) {
-        return Ok(None);
-    }
-
-    let asset = release
-        .assets
-        .iter()
-        .find(|asset| asset.name.eq_ignore_ascii_case(RELEASE_ASSET_NAME))
-        .or_else(|| {
-            release
-                .assets
-                .iter()
-                .find(|asset| asset.name.to_ascii_lowercase().ends_with(".exe"))
-        })
-        .ok_or_else(|| {
-            "No Windows executable asset was found in the latest release.".to_string()
-        })?;
-
-    Ok(Some(ReleaseDescriptor {
-        latest_version,
-        asset_url: asset.browser_download_url.clone(),
-    }))
-}
-
-fn github_repo() -> Result<(&'static str, &'static str), String> {
-    let repository = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/');
-    let parts: Vec<&str> = repository.split('/').collect();
-    if parts.len() < 2 {
-        return Err("Package repository URL is not configured for GitHub releases.".to_string());
-    }
-
-    let owner = parts[parts.len() - 2];
-    let repo = parts[parts.len() - 1];
-    if owner.is_empty() || repo.is_empty() {
-        return Err("Package repository URL is not configured for GitHub releases.".to_string());
-    }
-
-    Ok((owner, repo))
-}
-
-/// Compares versions shaped like `<major>.<minor>.<patch>[-trelowney.<build>]`.
-/// The trailing build number (after the last '.') of the `-trelowney.N`
-/// suffix is compared too, so e.g. `1.4.9-trelowney.2` is correctly newer
-/// than `1.4.9-trelowney.1` even though the base version is identical.
-fn is_version_newer(candidate: &str, current: &str) -> bool {
-    parse_version(candidate) > parse_version(current)
-}
-
-fn parse_version(version: &str) -> (u32, u32, u32, u32) {
-    let mut split = version.splitn(2, '-');
-    let core = split.next().unwrap_or(version);
-    let suffix = split.next().unwrap_or("");
-
-    let mut parts = core.split('.').map(|part| part.parse::<u32>().unwrap_or(0));
-    let build = suffix
-        .rsplit('.')
-        .next()
-        .and_then(|part| part.parse::<u32>().ok())
-        .unwrap_or(0);
-
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        build,
-    )
+    release_descriptor(release, env!("CARGO_PKG_VERSION"))
 }
 
 fn build_agent() -> Result<ureq::Agent, String> {
@@ -261,33 +211,11 @@ fn build_agent() -> Result<ureq::Agent, String> {
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
     Ok(ureq::Agent::config_builder()
+        .https_only(true)
         .timeout_global(Some(Duration::from_secs(30)))
         .tls_config(tls)
         .build()
         .into())
-}
-
-fn download_release_asset(url: &str, partial_path: &Path, final_path: &Path) -> Result<(), String> {
-    let agent = build_agent()?;
-    let response = agent
-        .get(url)
-        .header("User-Agent", user_agent())
-        .call()
-        .map_err(|e| format!("Unable to download the latest release: {e}"))?;
-
-    let mut reader = response.into_body().into_reader();
-    let mut file = File::create(partial_path)
-        .map_err(|e| format!("Unable to create temporary download file: {e}"))?;
-
-    io::copy(&mut reader, &mut file)
-        .map_err(|e| format!("Unable to write the downloaded update: {e}"))?;
-    file.flush()
-        .map_err(|e| format!("Unable to finalize the downloaded update: {e}"))?;
-
-    std::fs::rename(partial_path, final_path)
-        .map_err(|e| format!("Unable to finalize the downloaded update file: {e}"))?;
-
-    Ok(())
 }
 
 fn replace_target_binary(target: &Path, source: &Path) -> Result<(), String> {
@@ -452,6 +380,22 @@ fn ensure_target_location_writable(target: &Path) -> Result<(), String> {
     }
 }
 
+fn github_repo() -> Result<(&'static str, &'static str), String> {
+    let repository = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/');
+    let parts: Vec<&str> = repository.split('/').collect();
+    if parts.len() < 2 {
+        return Err("Package repository URL is not configured for GitHub releases.".to_string());
+    }
+
+    let owner = parts[parts.len() - 2];
+    let repo = parts[parts.len() - 1];
+    if owner.is_empty() || repo.is_empty() {
+        return Err("Package repository URL is not configured for GitHub releases.".to_string());
+    }
+
+    Ok((owner, repo))
+}
+
 fn user_agent() -> &'static str {
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"))
 }
@@ -461,7 +405,11 @@ fn is_winget_install_path(path: &Path) -> bool {
     winget_install_roots()
         .into_iter()
         .map(|root| normalize_path(&root))
-        .any(|root| normalized_path.starts_with(&root))
+        .any(|root| {
+            normalized_path
+                .strip_prefix(&root)
+                .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('\\'))
+        })
 }
 
 fn winget_install_roots() -> Vec<PathBuf> {
@@ -525,3 +473,6 @@ fn show_error_message(title: &str, message: &str) {
 fn wide_str(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
+
+#[cfg(test)]
+mod tests;

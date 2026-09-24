@@ -762,11 +762,12 @@ fn starter_theme_round_trips_and_validates() {
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
     // 1.4.9 palette follows the taskbar mode without runtime recolouring:
-    // five providers over two windows in two modes, plus a credit overlay on
-    // the weekly row of the two providers that report credits (24 total),
-    // and separate normal/high-usage (>=80%) variants of each of those so
-    // segments turn red without any runtime recolouring either.
-    assert_eq!(segments, vec![10; (5 * 2 * 2 + 2 * 2) * 2]);
+    // five providers over two windows in two modes, plus Grok, which fills
+    // only the long-window row, plus a credit overlay on that row for the
+    // three providers that report credits (28 total), and separate
+    // normal/high-usage (>=80%) variants of each of those so segments turn
+    // red without any runtime recolouring either.
+    assert_eq!(segments, vec![10; (5 * 2 * 2 + 2 + 3 * 2) * 2]);
     assert!(theme.surfaces[0]
         .children
         .iter()
@@ -1429,8 +1430,13 @@ fn starter_adapts_width_segments_and_collapsed_provider_rows() {
             10,
         ),
         (
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Grok])),
+            217,
+            10,
+        ),
+        (
             ThemeRuntime::from_providers(ProviderSet::from_enabled(ProviderId::ALL)),
-            545,
+            635,
             2,
         ),
     ] {
@@ -2502,4 +2508,41 @@ fn the_classic_theme_shows_one_badge_digit_group_in_both_usage_directions() {
             }
         }
     }
+}
+
+#[test]
+fn action_values_are_found_around_the_caret() {
+    // `source` marks the caret with `|`.
+    let at = |source: &str| {
+        let caret = source.find('|').unwrap();
+        action_value_at(&source.replace('|', ""), caret)
+    };
+    assert_eq!(at("set(self, width, |)"), Some(ActionValue::Bare));
+    assert_eq!(at("set(self.width, 1|)"), Some(ActionValue::Bare));
+    assert_eq!(
+        at("increase(\"bar\", x, round(canvas.width|) / 2)"),
+        Some(ActionValue::Bare)
+    );
+    assert_eq!(
+        at("show_dashboard(); decrease(self, y, |"),
+        Some(ActionValue::Bare),
+        "an unfinished action still has a value"
+    );
+    assert_eq!(
+        at("toggle(self, render)\nset(\"a,b\", x, |10)"),
+        Some(ActionValue::Bare),
+        "commas in a quoted layer id are not separators"
+    );
+    assert_eq!(
+        at(r#"layer_actions("set(\"bar\", width, |10)")"#),
+        Some(ActionValue::Quoted)
+    );
+    assert_eq!(at("set(self, |width, 1)"), None, "property, not value");
+    assert_eq!(at("se|t(self, width, 1)"), None);
+    assert_eq!(at("set(self, width, 1)|"), None);
+    assert_eq!(at("set(|self, 1)"), None, "the target is not a value");
+    assert_eq!(at("toggle(self, |render)"), None);
+    assert_eq!(at("open_url(\"https://|\")"), None);
+    assert_eq!(at(r#"layer_actions("toggle(self, |render)")"#), None);
+    assert_eq!(at(r#"layer_actions(|"set(self, x, 1)")"#), None);
 }
