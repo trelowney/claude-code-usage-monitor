@@ -237,10 +237,16 @@ mod tests {
                 ));
 
                 // Advance the cooldown's age without sleeping or restarting.
+                // Instant cannot go back a full day on a freshly booted
+                // machine (e.g. a CI runner), so expire it by shrinking the
+                // stored delay to its current age instead.
                 {
                     let mut cooldowns = state.cooldowns.lock().unwrap();
-                    cooldowns.get_mut(&key).unwrap().received =
-                        Instant::now() - Duration::from_secs(86_400);
+                    let cooldown = cooldowns.get_mut(&key).unwrap();
+                    match Instant::now().checked_sub(Duration::from_secs(86_400)) {
+                        Some(aged) => cooldown.received = aged,
+                        None => cooldown.delay = cooldown.received.elapsed(),
+                    }
                 }
                 let mut sent = false;
                 state
