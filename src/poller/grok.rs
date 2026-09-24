@@ -865,8 +865,10 @@ mod tests {
         ] {
             let path = root.join(format!("grok.{extension}"));
             std::fs::write(&path, script).unwrap();
+            // A cold PowerShell start on a busy CI runner can take longer than
+            // the production 5 s limit; this test is about the shim path only.
             assert_eq!(
-                read_cli_version(path.to_str().unwrap(), Duration::from_secs(5)).as_deref(),
+                read_cli_version(path.to_str().unwrap(), Duration::from_secs(30)).as_deref(),
                 Some("1.2.3"),
                 "{}",
                 path.display()
