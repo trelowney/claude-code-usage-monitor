@@ -762,12 +762,12 @@ fn starter_theme_round_trips_and_validates() {
         .collect::<Vec<_>>();
     // Classic contains separate light and dark progress layers so the
     // 1.4.9 palette follows the taskbar mode without runtime recolouring:
-    // five providers over two windows in two modes, plus Grok, which fills
-    // only the long-window row, plus a credit overlay on that row for the
-    // three providers that report credits (28 total), and separate
+    // five providers over two windows in two modes, plus Grok and Copilot,
+    // which fill only the long-window row, plus a credit overlay on that row
+    // for the three providers that report credits (30 total), and separate
     // normal/high-usage (>=80%) variants of each of those so segments turn
     // red without any runtime recolouring either.
-    assert_eq!(segments, vec![10; (5 * 2 * 2 + 2 + 3 * 2) * 2]);
+    assert_eq!(segments, vec![10; (5 * 2 * 2 + 2 * 2 + 3 * 2) * 2]);
     assert!(theme.surfaces[0]
         .children
         .iter()
@@ -1655,8 +1655,13 @@ fn starter_adapts_width_segments_and_collapsed_provider_rows() {
             10,
         ),
         (
+            ThemeRuntime::from_providers(ProviderSet::from_enabled([ProviderId::Copilot])),
+            217,
+            10,
+        ),
+        (
             ThemeRuntime::from_providers(ProviderSet::from_enabled(ProviderId::ALL)),
-            635,
+            725,
             2,
         ),
     ] {
