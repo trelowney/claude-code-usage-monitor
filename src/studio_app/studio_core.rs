@@ -122,6 +122,7 @@ impl StudioApp {
             startup_enabled: crate::window::is_startup_enabled(),
             theme,
             theme_path,
+            available_themes: AvailableThemesCache::new(theme_engine::themes_directory()),
             selection: Selection::Surface(0),
             preview: None,
             preview_dirty: true,
@@ -249,6 +250,7 @@ impl StudioApp {
             }
         };
         self.theme_path = Some(path.clone());
+        self.available_themes.invalidate();
         self.settings.active_theme_path = Some(path.to_string_lossy().into_owned());
         self.settings.custom_theme_enabled = true;
         self.dirty = false;
@@ -317,6 +319,7 @@ impl StudioApp {
         }
         match theme_package::import_path(source) {
             Ok(imported) => {
+                self.available_themes.invalidate();
                 if let Some((menu, path)) = imported.context_menu {
                     self.context_menu = menu;
                     self.context_menu_path = Some(path);
@@ -712,6 +715,7 @@ impl StudioApp {
         if theme_engine::delete_theme(&deletion.path).is_err() {
             return;
         }
+        self.available_themes.invalidate();
 
         self.theme = fallback_theme;
         self.theme_path = Some(fallback_path.clone());
