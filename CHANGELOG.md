@@ -4,6 +4,24 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.15.14-trelowney.2] - 2026-10-16
+
+This fork build stays on upstream 2.15.14 and ports selected later upstream
+changes. The upstream entries below 2.15.19 that this build does not include
+(2.15.20 to 2.15.22, 2.16.0, 2.18.0, 2.19.2, 2.19.3) are left out on purpose.
+
+### Added
+
+- GitHub Copilot usage monitoring (upstream 2.17.0), shown in Classic without tray icons and with red gauges from 80%.
+- A Fable weekly quota column in Classic and Compact Fluent Quad (upstream 2.19.0).
+- A startup prompt when a new release is available, with Download and install, Not now, and Skip this version.
+
+### Fixed
+
+- Read Codex monthly individual spend limits (upstream 2.17.1).
+- Show Grok usage as 0% after a billing reset (upstream 2.15.22).
+- Cache the theme list in Settings and Theme Studio to stop dashboard scrolling stutter (upstream 2.19.4).
+
 ## [2.15.19] - 2026-09-25
 
 ### Fixed

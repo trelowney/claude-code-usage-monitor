@@ -1,9 +1,9 @@
-name: CI (update-prompt WIP)
+name: CI (upstream-picks WIP)
 
 on:
   push:
     branches:
-      - update-prompt
+      - upstream-picks
 
 env:
   # Plain log output, so warnings can't hide behind ANSI escape codes.

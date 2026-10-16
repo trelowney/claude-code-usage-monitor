@@ -1,6 +1,6 @@
 [package]
 name = "claude-usage-monitor-trelowney"
-version = "2.15.14-trelowney.1"
+version = "2.15.14-trelowney.2"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
