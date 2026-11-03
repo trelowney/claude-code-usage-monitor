@@ -29,6 +29,12 @@ impl StudioApp {
             .with_poll_state(self.usage_poll_ok, self.usage_has_error)
             .with_language(language)
             .with_countdown(self.settings.usage_countdown)
+            .with_windows_default_font(self.settings.use_windows_default_font)
+            .with_antigravity_pools(
+                self.settings.antigravity_gemini_enabled(),
+                self.settings.antigravity_external_enabled(),
+                1.0,
+            )
     }
 
     pub(super) fn theme_runtime_for_surface(&self, surface_index: usize) -> ThemeRuntime {
@@ -170,16 +176,7 @@ impl StudioApp {
     }
 
     pub(super) fn notify_owner(&self) {
-        if self.owner != 0 {
-            unsafe {
-                let _ = PostMessageW(
-                    Some(HWND(self.owner as *mut _)),
-                    WM_APP_SETTINGS_UPDATED,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-        }
+        let _ = studio_diagnostics::send_owner_message(self.owner, WM_APP_SETTINGS_UPDATED);
     }
 
     pub(super) fn request_refresh(&mut self) {
@@ -817,6 +814,9 @@ impl StudioApp {
         }
         let now = Instant::now();
         self.last_cache_read = now;
+        if let Some(owner) = crate::dashboard::resolve_monitor_owner(self.owner) {
+            self.owner = owner;
+        }
         self.update_status = crate::dashboard::read_update_status(self.owner);
         self.sync_poll_interval(app_settings::load_settings().poll_interval_ms);
         let usage_changed =
@@ -912,7 +912,7 @@ impl StudioApp {
         let response = ui
             .scope(|ui| {
                 ui.add_enabled_ui(!self.update_status.is_busy(), |ui| {
-                    let icon_id = ui.id().with("version-update-icon");
+                    let icon_id = egui::IdSalt::new("version-update-icon");
                     // The footer column is a fixed, narrow width shared with the
                     // GitHub icon. This fork's `-trelowney.N` build suffix makes
                     // the full CARGO_PKG_VERSION too wide to fit there, so only
@@ -923,7 +923,7 @@ impl StudioApp {
                         .map_or(env!("CARGO_PKG_VERSION"), |(base, _)| base);
                     let version = format!("v{base_version}");
                     let background = ui.painter().add(egui::Shape::Noop);
-                    let button = egui::AtomLayout::new((
+                    let button = egui::WidgetAtom::new((
                         egui::RichText::new(&version).size(16.0).color(muted()),
                         egui::Atom::custom(icon_id, egui::vec2(12.0, 12.0)),
                     ))
@@ -951,11 +951,7 @@ impl StudioApp {
                         );
                     }
                     button.response.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            ui.is_enabled(),
-                            &version,
-                        )
+                        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &version)
                     });
                     if let Some(rect) = button.rect(icon_id) {
                         crate::ui::components::icon::paint_centered_icon(

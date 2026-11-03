@@ -64,6 +64,8 @@ pub enum ContextMenuAction {
     ToggleProvider {
         provider: ContextMenuProvider,
     },
+    ToggleAntigravityGemini,
+    ToggleAntigravityExternal,
     ToggleStartup,
     ToggleWidget,
     /// Accepted only so menus saved by older versions can be loaded and
@@ -383,11 +385,14 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 },
             ),
             ContextMenuItem::action(
-                "provider-antigravity",
-                "Antigravity",
-                Action::ToggleProvider {
-                    provider: Provider::Antigravity,
-                },
+                "provider-antigravity-gemini",
+                "Antigravity (Gemini)",
+                Action::ToggleAntigravityGemini,
+            ),
+            ContextMenuItem::action(
+                "provider-antigravity-external",
+                "Antigravity (Claude + GPT)",
+                Action::ToggleAntigravityExternal,
             ),
             ContextMenuItem::action(
                 "provider-opencode",

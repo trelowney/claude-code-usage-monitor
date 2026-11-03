@@ -227,31 +227,57 @@ pub(super) fn render_custom_window(
     }
 }
 
-pub(super) fn position_custom_theme(hwnd: HWND, theme: &ThemeDocument, scale: f64) {
-    position_custom_theme_internal(hwnd, theme, scale);
+pub(super) fn position_custom_theme(hwnd: HWND, theme: &ThemeDocument, scale: f64) -> bool {
+    position_custom_theme_internal(hwnd, theme, scale)
 }
 
-pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, scale: f64) {
-    let is_dragging = {
+pub(super) fn position_custom_theme_internal(
+    hwnd: HWND,
+    theme: &ThemeDocument,
+    scale: f64,
+) -> bool {
+    // Fork: a widget popped above the taskbar by a collision keeps the popup
+    // position the collision handler gave it until it re-docks. Dragging is
+    // not skipped here: this fork's drag moves the widget by rewriting the
+    // theme's offset and re-rendering, so positioning must follow it live.
+    let collision_popped = {
         let state = lock_state();
-        state.as_ref().is_some_and(|s| s.dragging)
+        state
+            .as_ref()
+            .is_some_and(|s| s.collision_popped && s.hwnd.to_hwnd() == hwnd)
     };
-    if is_dragging {
-        return;
+    if collision_popped {
+        return true;
     }
     let taskbars = native_interop::find_taskbars();
     let displays = native_interop::find_monitors();
     let display_index = theme.placement.reference.display;
+    let is_primary_surface = lock_state().as_ref().is_some_and(|state| {
+        state.hwnd.to_hwnd() == hwnd
+            || state
+                .desktop_hwnds
+                .first()
+                .and_then(|window| *window)
+                .map(SendHwnd::to_hwnd)
+                == Some(hwnd)
+    });
+    if !is_primary_surface && display_index >= displays.len() {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+        return false;
+    }
     let selected_display = displays
         .get(display_index)
         .copied()
         .or_else(|| displays.first().copied());
     let Some(display) = selected_display else {
-        return;
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+        return false;
     };
-    let taskbar = taskbars.iter().find(|taskbar| unsafe {
-        MonitorFromWindow(taskbar.hwnd, MONITOR_DEFAULTTOPRIMARY) == display.handle
-    });
+    let taskbar = native_interop::taskbar_for_monitor(&taskbars, &displays, display.handle);
     let width = scaled_theme_dimension(theme.canvas.width.max(1), scale);
     let height = scaled_theme_dimension(theme.canvas.height.max(1), scale);
     let tray = taskbar
@@ -276,9 +302,10 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
             SurfaceNest::Taskbar => {
                 let Some(taskbar) = taskbar else {
                     let _ = ShowWindow(hwnd, SW_HIDE);
-                    return;
+                    return false;
                 };
                 native_interop::embed_as_child(hwnd, taskbar.hwnd);
+                record_primary_taskbar(hwnd, taskbar.hwnd);
                 let mut point = [POINT { x, y }];
                 MapWindowPoints(None, Some(taskbar.hwnd), &mut point);
                 let _ = SetWindowPos(
@@ -308,13 +335,13 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                         SWP_NOACTIVATE,
                     );
                 } else {
-                    native_interop::make_popup(hwnd, false);
-                    let _ =
-                        SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, width, height, SWP_NOACTIVATE);
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    return false;
                 }
             }
             SurfaceNest::TrayIcon => {
                 let _ = ShowWindow(hwnd, SW_HIDE);
+                return false;
             }
             SurfaceNest::Floating | SurfaceNest::Auto => {
                 native_interop::make_popup(hwnd, true);
@@ -328,6 +355,20 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                     SWP_NOACTIVATE,
                 );
             }
+        }
+    }
+    true
+}
+
+/// Fork: remember which taskbar the primary surface is docked in. The
+/// collision watchdog (`taskbar_collision_action`) and the pop-up/re-dock
+/// handler read it; upstream recorded it as a side effect of its tray-icon
+/// event hook, which this fork does not use. Mirrors never replace it.
+fn record_primary_taskbar(surface: HWND, taskbar: HWND) {
+    if let Some(state) = lock_state().as_mut() {
+        if state.hwnd.to_hwnd() == surface {
+            state.taskbar_hwnd = Some(SendHwnd::from_hwnd(taskbar));
+            state.embedded = true;
         }
     }
 }
@@ -353,6 +394,7 @@ pub(super) fn sync_theme_window_visibility() {
                 .collect::<Vec<_>>(),
         )
     };
+    let display_count = native_interop::find_monitors().len();
     unsafe {
         for (surface_index, surface) in theme.surfaces.iter().enumerate() {
             let nest = surface
@@ -370,13 +412,16 @@ pub(super) fn sync_theme_window_visibility() {
                 continue;
             }
             let surface_runtime = theme_runtime_for_surface(&theme, surface_index, runtime);
-            let should_show =
-                theme_engine::surface_should_render(
+            let has_display =
+                surface_index == 0 || surface.placement.reference.display < display_count;
+            let should_show = has_display
+                && theme_engine::surface_should_render(
                     &theme,
                     surface_index,
                     data.as_ref(),
                     surface_runtime,
-                ) && !foreground_is_fullscreen_on_display(surface.placement.reference.display);
+                )
+                && !foreground_is_fullscreen_on_display(surface.placement.reference.display);
             if should_show == IsWindowVisible(hwnd).as_bool() {
                 continue;
             }

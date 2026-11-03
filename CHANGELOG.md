@@ -4,6 +4,31 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.15.14-trelowney.3] - 2026-11-03
+
+Ports upstream changes from 2.19.5 to 2.23.0, apart from their Windows VM test
+suite. Earlier exclusions stay excluded: no lock-in-taskbar, no Classic
+Vertical, no free-floating taskbar engine.
+
+### Added
+
+- A hover popup on the Classic widget with each provider's usage to one decimal place and its reset countdown (upstream 2.21.0).
+- Separate Antigravity pools for Gemini and Claude/GPT, each with its own menu toggle (upstream 2.20.0, 2.22.0).
+- A **Use Windows default font** setting under Settings > Appearance (upstream 2.23.0).
+
+### Fixed
+
+- Stop forwarding the widget's mouse messages to Explorer, which could freeze the taskbar (upstream 2.22.8).
+- Restart the widget when its UI thread stops answering, and recreate widget windows in place after an Explorer restart instead of relaunching (upstream 2.19.5, 2.21.1).
+- Hide Claude's five-hour meter when the account has no session quota (upstream 2.22.11).
+- Fall back to the Claude desktop app's token when the CLI token has expired, and find the desktop app's new data folder (upstream 2.20.3, 2.22.7).
+- Recover faster after HTTP 429 or a failed account (upstream 2.20.1, 2.20.3).
+- Round reset countdowns instead of truncating them (upstream 2.22.2).
+- Read Cursor's current billing period (upstream 2.21.2).
+- Dependency security updates for zip, ureq and webpki, and egui 0.37 (upstream 2.19.6 to 2.22.10).
+- Fork: the collision pop-up now knows which taskbar the widget is docked in, so it can actually trigger, and it stays popped instead of being re-docked by the next redraw.
+- Fork: dragging the widget along the taskbar now moves it live under the cursor.
+
 ## [2.15.14-trelowney.2] - 2026-10-16
 
 This fork build stays on upstream 2.15.14 and ports selected later upstream
