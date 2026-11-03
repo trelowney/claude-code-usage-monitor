@@ -36,3 +36,25 @@ jobs:
           name: "trelowney's Claude Usage Monitor ${{ github.ref_name }}"
           files: target/release/claude-usage-monitor-trelowney.exe
           generate_release_notes: true
+
+      - name: Build machine
+        if: always()
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
+          $rustc = (rustc -V)
+          $cargo = (cargo -V)
+          $lines = @(
+            "Runner:  $env:RUNNER_NAME ($env:RUNNER_OS $env:RUNNER_ARCH, $env:RUNNER_ENVIRONMENT)",
+            "Image:   $env:ImageOS $env:ImageVersion",
+            "OS:      $($os.Caption) $($os.Version) build $($os.BuildNumber)",
+            "CPU:     $($cpu.Name.Trim()) ($($cpu.NumberOfCores) cores / $($cpu.NumberOfLogicalProcessors) threads)",
+            "RAM:     $ram GB",
+            "Rust:    $rustc",
+            "Cargo:   $cargo",
+            "Commit:  $env:GITHUB_SHA ($env:GITHUB_REF_NAME)"
+          )
+          $lines | ForEach-Object { Write-Output $_ }
+          "### Build machine`n" + (($lines | ForEach-Object { "- $_" }) -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
