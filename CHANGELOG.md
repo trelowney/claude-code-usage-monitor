@@ -4,7 +4,7 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
-## [2.15.14-trelowney.3] - 2026-11-03
+## [2.23.0-trelowney.1] - 2026-11-03
 
 Ports upstream changes from 2.19.5 to 2.23.0, apart from their Windows VM test
 suite. Earlier exclusions stay excluded: no lock-in-taskbar, no Classic
