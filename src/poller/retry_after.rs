@@ -224,6 +224,20 @@ mod tests {
     use super::*;
     use ureq::http::Response;
 
+    /// An `Instant` this far in the past. Subtracting from `Instant::now()`
+    /// panics when the machine has not been up that long (a freshly started
+    /// CI runner), so wait until it has instead.
+    fn instant_ago(age: Duration) -> Instant {
+        let deadline = Instant::now() + age + Duration::from_secs(5);
+        loop {
+            if let Some(past) = Instant::now().checked_sub(age) {
+                return past;
+            }
+            assert!(Instant::now() < deadline, "clock never reached {age:?} of uptime");
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
     fn request(account: &str) -> Request<SendBody<'static>> {
         Request::builder()
             .uri("https://example.com/usage")
@@ -361,7 +375,7 @@ mod tests {
             .unwrap()
             .get_mut(&key)
             .unwrap()
-            .received = Instant::now() - Duration::from_secs(59);
+            .received = instant_ago(Duration::from_secs(59));
         assert!(matches!(
             with_manual_refresh(true, || state.handle(request("first"), |_| {
                 panic!("manual refresh sent within the first minute")
@@ -375,7 +389,7 @@ mod tests {
             .unwrap()
             .get_mut(&key)
             .unwrap()
-            .received = Instant::now() - Duration::from_secs(61);
+            .received = instant_ago(Duration::from_secs(61));
         assert!(matches!(
             state.handle(request("first"), |_| panic!(
                 "automatic poll bypassed cooldown"
@@ -419,7 +433,7 @@ mod tests {
                     .unwrap()
                     .get_mut(&key)
                     .unwrap()
-                    .received = Instant::now() - Duration::from_secs(61);
+                    .received = instant_ago(Duration::from_secs(61));
                 let original = state.cooldowns.lock().unwrap()[&key];
                 with_manual_refresh(true, || {
                     let result = state.handle(request("first"), |_| Ok(response(status, header)));
@@ -449,7 +463,7 @@ mod tests {
                     .unwrap()
                     .get_mut(&key)
                     .unwrap()
-                    .last_probe = Some(Instant::now() - Duration::from_secs(61));
+                    .last_probe = Some(instant_ago(Duration::from_secs(61)));
                 with_manual_refresh(true, || {
                     state
                         .handle(request("first"), |_| Ok(response(status, header)))
@@ -465,7 +479,7 @@ mod tests {
                     .unwrap()
                     .get_mut(&key)
                     .unwrap()
-                    .received = Instant::now() - MAX_RETRY_AFTER;
+                    .received = instant_ago(MAX_RETRY_AFTER);
                 assert!(state
                     .handle(request("first"), |_| Ok(response(200, None)))
                     .is_ok());
@@ -487,7 +501,7 @@ mod tests {
             .unwrap()
             .get_mut(&key)
             .unwrap()
-            .received = Instant::now() - Duration::from_secs(61);
+            .received = instant_ago(Duration::from_secs(61));
         let original = state.cooldowns.lock().unwrap()[&key];
         with_manual_refresh(true, || {
             assert!(matches!(
@@ -579,7 +593,7 @@ mod tests {
                 .unwrap()
                 .get_mut(&key)
                 .unwrap()
-                .received = Instant::now() - DEFAULT_RATE_LIMIT_DELAY;
+                .received = instant_ago(DEFAULT_RATE_LIMIT_DELAY);
             assert!(state
                 .handle(request("first"), |_| Ok(response(200, None)))
                 .is_ok());
